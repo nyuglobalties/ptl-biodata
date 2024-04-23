@@ -12,6 +12,15 @@ In R, run
 renv::restore()
 ```
 
+This repository only uses a handful of necessary packages, so this step is pretty quick.
+Notably, this repo uses
+
+- `tidytable`
+- `stringi`
+- `duckdb`
+
+which handle most of the legwork.
+
 ## Running pipeline
 
 To execute the pipeline, run
