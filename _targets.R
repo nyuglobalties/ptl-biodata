@@ -95,23 +95,16 @@ if (!is.null(box_root())) {
       ecg_meta_dt(raw_box_bodyguard_files, bg_root = box_bodyguard_root),
     ),
     tar_target(
-      esense_lengths,
-      esense_scan_length(raw_box_esense_files),
+      esense_meta_all,
+      esense_file_meta(raw_box_esense_files, esense_root = box_esense_root),
       pattern = map(raw_box_esense_files),
       iteration = "list"
     ),
     tar_target(
       esense_meta,
-      raw_box_esense_files |>
-        lapply(esense_file_meta, esense_root = box_esense_root) |>
-        discard(is.null) |>
-        tidytable::bind_rows() |>
-        tidytable::inner_join(
-          esense_lengths |>
-            keep(is.data.frame) |>
-            tidytable::bind_rows(),
-          by = "path"
-        )
+      esense_meta_all |>
+        keep(is.data.frame) |>
+        tidytable::bind_rows()
     ),
     tar_target(ecg_paths, ecg_meta_all$path),
     tar_target(
