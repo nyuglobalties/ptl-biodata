@@ -1,0 +1,11 @@
+.Rproj.user
+.RData
+.Renviron
+.Rhistory
+.Ruserdata
+.~lock.*#
+~$*.doc*
+~$*.xls*
+~$*.ppt*
+_targets
+_logs
