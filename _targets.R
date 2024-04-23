@@ -3,7 +3,6 @@
 library(targets)
 library(crew)
 
-
 source(here::here("projects/prelude.R"))
 
 # Unload targets after creation. Mainly useful for freeing up space
@@ -52,6 +51,10 @@ if (!is.null(box_root())) {
       "Bangladesh Study/Data/Mirage data/Wave 1 data",
     ),
     tar_target(
+      box_esense_root,
+      "Bangladesh Study/Data/eSense data/Wave 1 data",
+    ),
+    tar_target(
       raw_box_bodyguard_files,
       list.files(
         box_path(box_bodyguard_root),
@@ -70,6 +73,16 @@ if (!is.null(box_root())) {
       )
     ),
     tar_target(
+      raw_box_esense_files,
+      list.files(
+        box_path(box_esense_root),
+        recursive = TRUE,
+        full.names = TRUE,
+        pattern = "\\.csv$",
+        ignore.case = TRUE
+      )
+    ),
+    tar_target(
       raw_mirage_events,
       read_mirage_events(raw_box_mirage_files),
       pattern = map(raw_box_mirage_files),
@@ -80,6 +93,25 @@ if (!is.null(box_root())) {
     tar_target(
       ecg_meta_all,
       ecg_meta_dt(raw_box_bodyguard_files, bg_root = box_bodyguard_root),
+    ),
+    tar_target(
+      esense_lengths,
+      esense_scan_length(raw_box_esense_files),
+      pattern = map(raw_box_esense_files),
+      iteration = "list"
+    ),
+    tar_target(
+      esense_meta,
+      raw_box_esense_files |>
+        lapply(esense_file_meta, esense_root = box_esense_root) |>
+        discard(is.null) |>
+        tidytable::bind_rows() |>
+        tidytable::inner_join(
+          esense_lengths |>
+            keep(is.data.frame) |>
+            tidytable::bind_rows(),
+          by = "path"
+        )
     ),
     tar_target(ecg_paths, ecg_meta_all$path),
     tar_target(
@@ -92,7 +124,7 @@ if (!is.null(box_root())) {
       prepped_bodyguard_time_limits,
       bodyguard_time_limits |>
         lapply(bg_prepare_file_limits) |>
-        purrr::keep(is.data.frame) |>
+        keep(is.data.frame) |>
         tidytable::bind_rows() |>
         # Reject badly-formatted timestamps
         tidytable::filter(start >= "2023-01-01") |>
@@ -103,11 +135,11 @@ if (!is.null(box_root())) {
           by = "path"
         ) |>
         tidytable::mutate(
-          start_adj = lubridate::force_tzs(start, locale, tzone_out = "Asia/Dhaka"),
+          start_adj = lubridate::force_tzs(start, locale, tzone_out = "UTC"),
           .after = start,
         ) |>
         tidytable::mutate(
-          end_adj = lubridate::force_tzs(end, locale, tzone_out = "Asia/Dhaka"),
+          end_adj = lubridate::force_tzs(end, locale, tzone_out = "UTC"),
           .after = end,
         ),
     ),

@@ -1,11 +1,3 @@
-explode_path <- function(f) {
-  if (!dirname(f) %in% c(".", "/")) {
-    c(explode_path(dirname(f)), basename(f))
-  } else {
-    basename(f)
-  }
-}
-
 ecg_meta_dt <- function(paths, bg_root) {
   bg_root_abs <- box_path(bg_root)
   explode_rel_path <- \(x) explode_path(gsub(bg_root_abs, "", x, fixed = TRUE))

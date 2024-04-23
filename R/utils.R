@@ -93,6 +93,18 @@ vlapply2 <- vapply2_mold("logical")
 viapply2 <- vapply2_mold("integer")
 vdapply2 <- vapply2_mold("double")
 
+keep <- function(.x, .p, ...) {
+  keeps <- vlapply(.x, .f = .p, ...)
+
+  .x[keeps]
+}
+
+discard <- function(.x, .p, ...) {
+  discards <- vlapply(.x, .f = .p, ...)
+
+  .x[!discards]
+}
+
 run_unit_tests <- function(path = here::here("tests")) {
   if (dir.exists(path)) {
     num_files <- length(list.files(path, pattern = "^test-.*\\.R"))
@@ -303,4 +315,12 @@ has_internet <- function() {
   # For reference, 1.1.1.1 is the Cloudflare DNS edge server, so if it's not reachable
   # most likely there is an internet connection issue.
   !is.null(curl::nslookup("1.1.1.1", error = FALSE))
+}
+
+explode_path <- function(f) {
+  if (!dirname(f) %in% c(".", "/")) {
+    c(explode_path(dirname(f)), basename(f))
+  } else {
+    basename(f)
+  }
 }
