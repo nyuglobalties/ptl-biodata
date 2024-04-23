@@ -55,11 +55,12 @@ if (!is.null(box_root())) {
       "Bangladesh Study/Data/eSense data/Wave 1 data",
     ),
     tar_target(
-      raw_box_bodyguard_files,
+      raw_box_ecg_files,
       list.files(
         box_path(box_bodyguard_root),
         recursive = TRUE,
-        full.names = TRUE
+        full.names = TRUE,
+        pattern = "ecg\\.csv$"
       )
     ),
     tar_target(
@@ -91,8 +92,10 @@ if (!is.null(box_root())) {
 
     # 1. Transformation ------
     tar_target(
-      ecg_meta_all,
-      ecg_meta_dt(raw_box_bodyguard_files, bg_root = box_bodyguard_root),
+      bodyguard_file_meta,
+      bg_file_meta(raw_box_ecg_files),
+      pattern = map(raw_box_ecg_files),
+      iteration = "list"
     ),
     tar_target(
       esense_meta_all,
@@ -105,40 +108,6 @@ if (!is.null(box_root())) {
       esense_meta_all |>
         keep(is.data.frame) |>
         tidytable::bind_rows()
-    ),
-    tar_target(ecg_paths, ecg_meta_all$path),
-    tar_target(
-      bodyguard_time_limits,
-      bg_scan_file_limits(ecg_paths),
-      pattern = map(ecg_paths),
-      iteration = "list",
-    ),
-    tar_target(
-      prepped_bodyguard_time_limits,
-      bodyguard_time_limits |>
-        lapply(bg_prepare_file_limits) |>
-        keep(is.data.frame) |>
-        tidytable::bind_rows() |>
-        # Reject badly-formatted timestamps
-        tidytable::filter(start >= "2023-01-01") |>
-        tidytable::left_join(
-          ecg_meta_all |>
-            tidytable::select(path, locale) |>
-            unique(),
-          by = "path"
-        ) |>
-        tidytable::mutate(
-          start_adj = lubridate::force_tzs(start, locale, tzone_out = "UTC"),
-          .after = start,
-        ) |>
-        tidytable::mutate(
-          end_adj = lubridate::force_tzs(end, locale, tzone_out = "UTC"),
-          .after = end,
-        ),
-    ),
-    tar_target(
-      bg_long_meta,
-      bg_generate_long_table(ecg_meta_all)
     ),
 
     # 2. Loading ------
