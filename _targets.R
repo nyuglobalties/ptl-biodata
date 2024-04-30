@@ -107,16 +107,29 @@ if (!is.null(box_root())) {
       esense_meta,
       esense_meta_all |>
         keep(is.data.frame) |>
-        tidytable::bind_rows()
+        tidytable::bind_rows() |>
+        unique() |>
+        tidytable::arrange(mirage_pid, start_time) |>
+        tidytable::mutate(id = seq_len(.N))
     ),
-
+    tar_target(
+      mirage_windows,
+      raw_mirage_events |>
+        mirage_prepare_events() |>
+        mirage_process_windows(),
+    ),
+    tar_target(
+      combined_esense_mirage,
+      combine_esense_mirage(esense_meta, mirage_windows)
+    ),
     # 2. Loading ------
 
     # 4. Reports ------
-    # tar_render(
-    #   report_bodyguard_data,
-    #   proj_here("reports/bodyguard.Rmd")
-    # ),
+    tar_render(
+      report_linkage,
+      here::here("reports/linkage-inspection.Rmd"),
+      output_file = here::here("outputs/linkage-inspection.html"),
+    ),
   ) # end rlang::list2()
 
   main_targets <- append(main_targets, box_targets)

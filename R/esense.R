@@ -31,7 +31,7 @@ esense_file_meta <- function(path, esense_root) {
     return(lines)
   }
 
-  out
+  esense_meta_pivot(out)
 }
 
 esense_add_times_ <- function(dat, lines) {
@@ -80,12 +80,14 @@ esense_scan_length_ <- function(dat, lines) {
 
   # I love embedding SQL in R ... thank you DuckDB
   conn <- duckdb::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+  on.exit(duckdb::dbDisconnect(conn))
+
   res <- DBI::dbGetQuery(
     conn,
     glue::glue("
       WITH cte AS (
         SELECT CAST(regexp_replace(\"SECOND\", ',', '.') AS FLOAT) AS seconds
-        FROM read_csv( '{dat$path}', delim = ';', 
+        FROM read_csv('{dat$path}', delim = ';', 
           all_varchar = true,
           skip = {idx - 1}
         )
@@ -96,4 +98,25 @@ esense_scan_length_ <- function(dat, lines) {
 
   dat[, length_secs := res]
   invisible(dat)
+}
+
+esense_meta_pivot <- function(dat) {
+  conn <- duckdb::dbConnect(duckdb::duckdb(), ":memory:")
+  on.exit(duckdb::dbDisconnect(conn))
+
+  duckdb::duckdb_register(conn, "esense", dat)
+
+  res <- DBI::dbGetQuery(conn, "
+    WITH cte as (
+      UNPIVOT esense ON COLUMNS('^start_time_') INTO
+        NAME tz
+        VALUE start_time
+    )
+    SELECT 
+      * REPLACE (regexp_replace(tz, 'start_time_', '') AS tz),
+      start_time + INTERVAL (length_secs) SECOND as end_time
+    FROM cte;
+  ")
+
+  res
 }

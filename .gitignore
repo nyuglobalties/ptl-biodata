@@ -9,3 +9,4 @@
 ~$*.ppt*
 _targets
 _logs
+*.html

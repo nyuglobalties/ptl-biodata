@@ -74,7 +74,7 @@ bg_scan_file_limits_ <- function(dat) {
   table_header <- tryCatch(
     DBI::dbGetQuery(
       conn,
-      glue::glue("SELECT * FROM '{path}' LIMIT 1")
+      glue::glue("SELECT * FROM '{dat$path}' LIMIT 1")
     ),
     error = function(e) {
       e
@@ -98,12 +98,12 @@ bg_scan_file_limits_ <- function(dat) {
 
   start <- DBI::dbGetQuery(
     conn,
-    glue::glue("SELECT {time_col} FROM '{path}' ORDER BY 1 ASC LIMIT 1")
+    glue::glue("SELECT {time_col} FROM '{dat$path}' ORDER BY 1 ASC LIMIT 1")
   )[[1]]
 
   end <- DBI::dbGetQuery(
     conn,
-    glue::glue("SELECT {time_col} FROM '{path}' ORDER BY 1 DESC LIMIT 1")
+    glue::glue("SELECT {time_col} FROM '{dat$path}' ORDER BY 1 DESC LIMIT 1")
   )[[1]]
 
   dat[, c("start", "end") := .(start, end)]
