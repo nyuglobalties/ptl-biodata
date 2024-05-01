@@ -1,0 +1,124 @@
+---
+title: Inspecting linkage reliability across bio data
+output: html_notebook
+---
+
+```{r, include=FALSE}
+if (interactive()) {
+  targets::tar_config_set(store = here::here("_targets"))
+}
+```
+
+
+I'm using eSense file count as a proxy for total sessions as there is currently one file per participant per wave. Matching Mirage to eSense is the first step of finding the correct window.
+
+In theory, eSense and Mirage were collected on the same tablet, so the clock times should be compatible to at least the second.
+
+```{r}
+targets::tar_load(esense_meta)
+targets::tar_load(mirage_windows)
+
+# Using DuckDB
+conn <- duckdb::dbConnect(duckdb::duckdb(), ":memory:")
+duckdb::duckdb_register(conn, "esense", esense_meta)
+duckdb::duckdb_register(conn, "mirage", mirage_windows)
+```
+
+Mirage comes in a stream of events. I have selected on the "play" and "baseline" events for now. They are processed using a stack to capture any nested events.
+
+```{sql, connection = conn}
+SELECT * FROM mirage USING SAMPLE 100;
+```
+
+```{sql, connection = conn}
+WITH cte AS (
+  SELECT DISTINCT mirage_pid
+    , device
+    , length_secs
+    , start_time
+    , end_time
+  FROM esense 
+  WHERE tz = 'bd'
+)
+SELECT * FROM cte USING SAMPLE 100;
+```
+
+From some manual inspection, it appears that eSense and Mirage window ends are around the same time, so this creates an ability to pick which is the correct time zone
+for the eSense data. I am taking the absolute value of the difference, but in most cases eSense ends afterwards.
+
+```{sql, connection = conn}
+CREATE TABLE me_merge AS WITH e AS (
+  SELECT *
+    , date_trunc('day', start_time) AS date
+  FROM esense
+), m AS (
+  SELECT *
+    , date_trunc('day', start) AS date
+  FROM mirage
+), cte AS (
+  SELECT e.mirage_pid AS mirage_pid
+    , e.date AS date
+    , m.start AS start_m
+    , e.start_time AS start_e
+    , m.end AS end_m
+    , e.end_time AS end_e
+    , e.tz AS tz
+    , e.path AS file_esense
+    , m.id AS row_mirage
+  FROM m
+  LEFT JOIN e ON
+    m.mirage_pid = e.mirage_pid AND
+    m.date = e.date
+), cte1 AS (
+  SELECT *
+    , @date_diff('minutes', end_e, end_m) AS diff_end
+  FROM cte
+)
+SELECT *
+  , min(diff_end) OVER (PARTITION BY mirage_pid, date ORDER BY diff_end) AS min_diff_end
+FROM cte1
+QUALIFY diff_end = min_diff_end;
+```
+
+```{sql, connection = conn}
+FROM me_merge LIMIT 100;
+```
+
+It looks like there are many ties with the Bangladesh and Almaty "timezone" entries. Since we've already calculated the time lag
+and considered the differences, if we exclude the `tz` column and take a `DISTINCT` these ties should be resolved.
+
+```{sql, connection = conn}
+CREATE TABLE me_merge_distinct AS SELECT DISTINCT * EXCLUDE (tz) FROM me_merge;
+```
+
+As of May 2024, we only have Mirage up to a certain point, so recovery calculations must account for this.
+
+```{sql, connection = conn}
+WITH cte AS (
+  SELECT e.path AS path
+    , CASE WHEN m.row_mirage IS NULL THEN 0 ELSE 1 END AS record_match
+    , date_trunc('day', e.start_time) AS date_esense
+    , m.date AS date_merged
+  FROM esense e
+  LEFT JOIN me_merge_distinct m ON e.path = m.file_esense
+)
+SELECT 100 * sum(record_match) / COUNT(*) AS pct_recovery 
+FROM cte
+WHERE date_esense <= (SELECT max(date_merged) FROM cte)
+```
+
+This is a reasonable automated recovery rate, enough to go forward with this approach for the editors.
+Finding the eSense files that don't match might be a task for another time and may not be worth it.
+
+The final step is to synchronize Bodyguard. 
+Since we have the eSense to Mirage linkage, we can scan for other Mirage events that happen within the same 1 or 2 hours (later inspection will validate) of the Mirage event that matches eSense. 
+These Mirage events then can put us in the right temporal zone to filter the Bodyguard files.
+
+```{r, include=FALSE}
+DBI::dbDisconnect(conn)
+```
+
+
+
+
+

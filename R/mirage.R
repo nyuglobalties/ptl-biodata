@@ -31,8 +31,10 @@ mirage_process_windows <- function(events) {
     tidytable::mutate(
       start = as.POSIXct(as.numeric(start) / 1000, origin = "1970-01-01"),
       end = as.POSIXct(as.numeric(end) / 1000, origin = "1970-01-01"),
-      length = difftime(end, start),
+      length = difftime(end, start, units = "secs"),
     ) |>
+    # Only include windows that *could* include baseline events (>30s)
+    tidytable::filter(as.numeric(length) >= 30) |>
     unique() |>
     tidytable::arrange(mirage_pid, start) |>
     tidytable::mutate(id = seq_len(.N))
