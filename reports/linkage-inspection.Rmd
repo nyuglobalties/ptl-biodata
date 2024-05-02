@@ -139,8 +139,7 @@ WITH cte AS (
   SELECT a.id AS id_a
     , b.id AS id_b
   FROM (SELECT id FROM cte1) a
-    , (SELECT id FROM cte1) b
-  WHERE id_a <> id_b
+  FULL OUTER JOIN (SELECT id FROM cte1) b ON a.id <> b.id
 ), linked_tuples AS (
   SELECT id_tuples.id_a AS id_parent
     , id_tuples.id_b AS id_child
