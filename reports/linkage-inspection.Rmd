@@ -114,11 +114,64 @@ The final step is to synchronize Bodyguard.
 Since we have the eSense to Mirage linkage, we can scan for other Mirage events that happen within the same 1 or 2 hours (later inspection will validate) of the Mirage event that matches eSense. 
 These Mirage events then can put us in the right temporal zone to filter the Bodyguard files.
 
+```{sql, connection = conn}
+CREATE TABLE m AS SELECT *
+  , date_trunc('day', start) AS date
+FROM mirage;
+```
+
+What follows may be the ugliest query I have ever written.
+
+```{sql, connection = conn}
+WITH cte AS (
+  SELECT me.row_mirage AS id
+    , true AS link
+  FROM me_merge_distinct me
+), cte1 AS (
+  SELECT m.id AS id
+    , m.mirage_pid AS mirage_pid
+    , m.date AS date
+    , m.event AS event
+    , m.start AS start
+    , ifnull(me.link, false) AS link
+  FROM m LEFT JOIN cte me ON m.id = me.id
+), id_tuples AS (
+  SELECT a.id AS id_a
+    , b.id AS id_b
+  FROM (SELECT id FROM cte1) a
+    , (SELECT id FROM cte1) b
+  WHERE id_a <> id_b
+), linked_tuples AS (
+  SELECT id_tuples.id_a AS id_parent
+    , id_tuples.id_b AS id_child
+    , COLUMNS('_parent$')
+    , COLUMNS('_child$')
+    , @date_diff('minutes', start_parent, start_child) AS diff_start
+  FROM id_tuples
+  INNER JOIN (SELECT id FROM cte1 WHERE link) tmp ON tmp.id = id_tuples.id_a
+  LEFT JOIN (
+    SELECT id
+      , mirage_pid AS mpid_parent
+      , date AS date_parent
+      , start AS start_parent
+    FROM cte1
+  ) tmp1 ON tmp1.id = id_tuples.id_a
+  LEFT JOIN (
+    SELECT id
+      , mirage_pid AS mpid_child
+      , date AS date_child
+      , start AS start_child
+    FROM cte1
+  ) tmp2 ON tmp2.id = id_tuples.id_b
+  WHERE mpid_parent = mpid_child
+    AND date_parent = date_child
+)
+SELECT * FROM linked_tuples WHERE diff_start <= 30 LIMIT 100;
+```
+
+This finds all neighboring Mirage events to the "parent" eSense linked event (parent could also mean mother, but I mean parent/child in a graph relationship).
+With these events linked, now the Bodyguard files can be linked to the parent **and** child Mirage events.
+
 ```{r, include=FALSE}
 DBI::dbDisconnect(conn)
 ```
-
-
-
-
-
