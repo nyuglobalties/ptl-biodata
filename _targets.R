@@ -105,7 +105,7 @@ if (!is.null(box_root())) {
       scanned_bodyguard_files,
       bg_scan_into_lake_cache(
         raw_box_ecg_files,
-        root_dir = box_path("ties_ptl_bio", "bodyguard")
+        root_dir = box_path("ptl_irrrd_bio", "bodyguard")
       ),
       pattern = map(raw_box_ecg_files),
       iteration = "list"
