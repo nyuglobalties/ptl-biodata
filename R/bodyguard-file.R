@@ -383,6 +383,10 @@ bg_check_file <- function(conn, path) {
     return(NULL)
   }
 
+  if (nrow(table_header) < 1) {
+    return(NULL)
+  }
+
   cols <- names(table_header)
 
   if (!any(possible_time_cols %in% cols)) {
