@@ -48,3 +48,7 @@ find_box_path <- function() {
 
   path
 }
+
+localize_box_path <- function(path, root = box_root()) {
+  gsub(root, "", path, fixed = TRUE)
+}

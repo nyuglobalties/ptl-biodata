@@ -55,6 +55,10 @@ if (!is.null(box_root())) {
       "Bangladesh Study/Data/eSense data/Wave 1 data",
     ),
     tar_target(
+      ptl_lake_root,
+      "ties-lake/ptl"
+    ),
+    tar_target(
       raw_box_ecg_files,
       list.files(
         box_path(box_bodyguard_root),
@@ -91,12 +95,31 @@ if (!is.null(box_root())) {
     ),
 
     # 1. Transformation ------
+    # tar_target(
+    #   bodyguard_file_meta,
+    #   bg_file_meta(raw_box_ecg_files),
+    #   pattern = map(raw_box_ecg_files),
+    #   iteration = "list"
+    # ),
     tar_target(
-      bodyguard_file_meta,
-      bg_file_meta(raw_box_ecg_files),
+      scanned_bodyguard_files,
+      bg_scan_into_lake_cache(
+        raw_box_ecg_files,
+        root_dir = box_path("ties_ptl_bio", "bodyguard")
+      ),
       pattern = map(raw_box_ecg_files),
       iteration = "list"
     ),
+    # tar_target(
+    #   bodyguard_file_meta_all,
+    #   bodyguard_file_meta |>
+    #     discard(is.null) |>
+    #     tidytable::bind_rows() |>
+    #     # Post-hoc changes
+    #     tidytable::mutate(
+    #       device_id = gsub("^(BG\\d{8}).*$", "\\1", device_id),
+    #     )
+    # ),
     tar_target(
       esense_meta_all,
       esense_file_meta(raw_box_esense_files, esense_root = box_esense_root),

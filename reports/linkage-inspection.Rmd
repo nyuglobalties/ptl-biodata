@@ -17,6 +17,7 @@ In theory, eSense and Mirage were collected on the same tablet, so the clock tim
 ```{r}
 targets::tar_load(esense_meta)
 targets::tar_load(mirage_windows)
+targets::tar_load(bodyguard_file_meta_all)
 
 # Using DuckDB
 conn <- duckdb::dbConnect(duckdb::duckdb(), ":memory:")

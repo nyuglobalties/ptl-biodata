@@ -9,4 +9,5 @@
 ~$*.ppt*
 _targets
 _logs
+_duckdb
 *.html
