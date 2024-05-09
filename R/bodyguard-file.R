@@ -1,3 +1,44 @@
+#' Read file metadata
+#'
+#' @param path string - Path to CSV file
+#' @return ?data.frame(
+#'   asset_id: string,
+#'   path: string,
+#'   sequence: integer(1),
+#'   device_id: string,
+#'   time_col: string,
+#'   tz: string,
+#'   sampling_rate: double(1),
+#' )
+bg_file_meta <- function(path) {
+  stopifnot(is.character(path) && length(path) == 1)
+
+  out <- data.table::data.table(
+    asset_id = bg_asset_id(path),
+    path = path
+  )
+
+  bg_parse_file_header_(out)
+  bg_parse_file_sequence_(out)
+
+  conn <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+  on.exit(DBI::dbDisconnect(conn))
+
+  time_col <- bg_check_get_timecol(conn, path)
+  if (is.null(time_col)) {
+    # Invalid CSV format
+    return(NULL)
+  }
+
+  out |>
+    tidytable::mutate(time_col = time_col) |>
+    tidytable::select(
+      asset_id, path, sequence,
+      device_id, time_col, tz,
+      sampling_rate
+    )
+}
+
 #' Scan Bodyguard CSV into Hive-partitioned data lake
 #'
 #' This reads the CSVs, converts local times to UNIX Epoch milliseconds,
@@ -5,23 +46,26 @@
 #' creates partitioning columns (year and month), and saves out as
 #' as Hive-partitioned Parquet file.
 #'
-#' @param path string - Path to CSV file
+#' @param meta ?data.frame - Output of [bg_file_meta()]
 #' @param root_dir string - The root directory of the Hive partition
 #' @param cache_root string ($projroot/_duckdb) - Where crew workers save out
 #'        intermediate data if needed
 #' @return data.frame(asset_id: string, path: string, hive_path: string) -
 #'         Record of where the ingested data is located
-bg_scan_into_lake_cache <- function(path,
+bg_scan_into_lake_cache <- function(meta,
                                     root_dir,
                                     cache_root = here::here("_duckdb")) {
+  if (is.null(meta)) {
+    return(NULL)
+  }
+
   assert_string(root_dir)
   assert_string(cache_root)
 
   cache_paths <- bg_check_paths(bg_get_worker_id(), cache_root = cache_root)
-  asset_id <- bg_asset_id(path)
 
   # Does the file already exist in the bucket?
-  known_data <- bg_find_data_for_path(path, root_dir)
+  known_data <- bg_find_data_for_path(meta$path, root_dir)
   if (!is.null(known_data)) {
     return(known_data)
   }
@@ -30,19 +74,7 @@ bg_scan_into_lake_cache <- function(path,
   on.exit(DBI::dbDisconnect(conn))
 
   bg_setup_tables_(conn, cache_paths)
-
-  check_obj <- bg_check_file(conn, path)
-  if (is.null(check_obj)) {
-    return(NULL)
-  }
-
-  meta <- bg_file_meta(path)
-  time_col <- check_obj$time_col
-
-  rows <- bg_load_into_ddb(
-    conn = conn, path = path,
-    meta = meta, time_col = time_col
-  )
+  rows <- bg_load_into_ddb(conn = conn, meta = meta)
 
   if (rows < 1) {
     # Something wonky happened
@@ -50,8 +82,8 @@ bg_scan_into_lake_cache <- function(path,
   }
 
   bg_asset_meta_df(
-    path = path,
-    hive_path = bg_write_parquet(conn, asset_id, root_dir)
+    path = meta$path,
+    hive_path = bg_write_parquet(conn, meta$asset_id, root_dir)
   )
 }
 
@@ -126,19 +158,21 @@ bg_setup_tables_ <- function(conn, cache_paths) {
   invisible(conn)
 }
 
-bg_read_local_time_csv <- function(conn, path, meta) {
-  asset_id <- bg_asset_id(path)
+bg_read_local_time_csv <- function(conn, meta) {
+  asset_id <- meta$asset_id
 
+  # Use a view to push down the operators directly to the CSV
+  # and only use the worker file for spillover *if needed*
   rows <- DBI::dbExecute(
     conn,
     glue::glue("
-      CREATE OR REPLACE TABLE bodyguard AS
+      CREATE OR REPLACE VIEW bodyguard AS
       WITH cte AS (
         SELECT *
           , nextval('id_sequence') AS id
           , '{meta$tz}' AS tz
           , '{asset_id}' AS asset_id
-        FROM '{path}'
+        FROM '{meta$path}'
       ), cte1 AS (
         SELECT * EXCLUDE local_time
           , epoch_ms(timezone('{meta$tz}', local_time)) AS t
@@ -154,18 +188,18 @@ bg_read_local_time_csv <- function(conn, path, meta) {
   rows
 }
 
-bg_read_timestamped_csv <- function(conn, path) {
-  asset_id <- bg_asset_id(path)
+bg_read_timestamped_csv <- function(conn, meta) {
+  asset_id <- meta$asset_id
 
   rows <- DBI::dbExecute(
     conn,
     glue::glue("
-      CREATE OR REPLACE TABLE bodyguard AS
+      CREATE OR REPLACE VIEW bodyguard AS
       WITH cte AS (
         SELECT *
           , nextval('id_sequence') AS id
           , '{asset_id}' AS asset_id
-        FROM '{path}'
+        FROM '{meta$path}'
       ), cte1 AS (
         SELECT *,
           date_part('year', to_timestamp(timestamp)) AS year
@@ -187,15 +221,15 @@ bg_read_timestamped_csv <- function(conn, path) {
   rows
 }
 
-bg_load_into_ddb <- function(conn, path, meta, time_col) {
-  assert_string(path)
-  assert_string(time_col)
+bg_load_into_ddb <- function(conn, meta) {
+  assert_string(meta$path)
+  assert_string(meta$time_col)
   stopifnot(is.data.frame(meta))
 
-  if (identical(time_col, "local_time")) {
-    rows <- bg_read_local_time_csv(conn, path, meta)
+  if (identical(meta$time_col, "local_time")) {
+    rows <- bg_read_local_time_csv(conn, meta)
   } else {
-    rows <- bg_read_timestamped_csv(conn, path)
+    rows <- bg_read_timestamped_csv(conn, meta)
   }
 
   rows
@@ -254,19 +288,6 @@ bg_write_parquet <- function(conn, asset_id, root_dir) {
   hive_path
 }
 
-bg_file_meta <- function(path) {
-  stopifnot(is.character(path) && length(path) == 1)
-
-  out <- data.table::data.table(
-    path = path
-  )
-
-  bg_parse_file_header_(out)
-  bg_parse_file_sequence_(out)
-
-  out
-}
-
 bg_asset_id <- function(path) {
   digest::digest(path, algo = "xxhash64")
 }
@@ -306,9 +327,9 @@ bg_parse_file_header_ <- function(dat) {
     gsub("^\\# Device\\: ", "", x = _) |>
     gsub(".*(*BG\\d{8}).*", "\\1", x = _)
 
+  dat[, device_id := device_id]
   dat[, sampling_rate := sampling_rate]
   dat[, tz := tz]
-  dat[, device_id := device_id]
 
   invisible(dat)
 }
@@ -338,7 +359,7 @@ bg_scan_file_limits_ <- function(dat) {
   conn <- duckdb::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
   on.exit(duckdb::dbDisconnect(conn))
 
-  check_obj <- bg_check_file(conn, dat$path)
+  check_obj <- bg_check_get_timecol(conn, dat$path)
   if (is.null(check_obj)) {
     return(NULL)
   }
@@ -367,7 +388,8 @@ bg_scan_file_limits_ <- function(dat) {
   invisible(dat)
 }
 
-bg_check_file <- function(conn, path) {
+#' Make sure the CSV has the expected format
+bg_check_get_timecol <- function(conn, path) {
   possible_time_cols <- c("timestamp", "local_time")
   table_header <- tryCatch(
     DBI::dbGetQuery(
@@ -396,10 +418,5 @@ bg_check_file <- function(conn, path) {
     )
   }
 
-  time_col <- possible_time_cols[possible_time_cols %in% cols]
-
-  list(
-    table_header = table_header,
-    time_col = time_col
-  )
+  possible_time_cols[possible_time_cols %in% cols]
 }

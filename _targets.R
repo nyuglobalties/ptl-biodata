@@ -95,19 +95,19 @@ if (!is.null(box_root())) {
     ),
 
     # 1. Transformation ------
-    # tar_target(
-    #   bodyguard_file_meta,
-    #   bg_file_meta(raw_box_ecg_files),
-    #   pattern = map(raw_box_ecg_files),
-    #   iteration = "list"
-    # ),
+    tar_target(
+      bodyguard_file_meta,
+      bg_file_meta(raw_box_ecg_files),
+      pattern = map(raw_box_ecg_files),
+      iteration = "list"
+    ),
     tar_target(
       scanned_bodyguard_files,
       bg_scan_into_lake_cache(
-        raw_box_ecg_files,
+        bodyguard_file_meta,
         root_dir = box_path("ptl_irrrd_bio", "bodyguard")
       ),
-      pattern = map(raw_box_ecg_files),
+      pattern = map(bodyguard_file_meta),
       iteration = "list"
     ),
     # tar_target(
