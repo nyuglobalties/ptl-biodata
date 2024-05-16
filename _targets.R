@@ -4,6 +4,7 @@ library(targets)
 library(crew)
 
 source(here::here("projects/prelude.R"))
+options(digits.secs = 3)
 
 # Unload targets after creation. Mainly useful for freeing up space
 # after rendering reports
@@ -55,10 +56,6 @@ if (!is.null(box_root())) {
       "Bangladesh Study/Data/eSense data/Wave 1 data",
     ),
     tar_target(
-      ptl_lake_root,
-      "ties-lake/ptl"
-    ),
-    tar_target(
       raw_box_ecg_files,
       list.files(
         box_path(box_bodyguard_root),
@@ -88,38 +85,50 @@ if (!is.null(box_root())) {
       )
     ),
     tar_target(
-      raw_mirage_events,
-      read_mirage_events(raw_box_mirage_files),
-      pattern = map(raw_box_mirage_files),
-      iteration = "list",
+      ecg_sessions_meta,
+      bg_ecg_session_meta(
+        raw_box_ecg_files,
+        bg_root = box_bodyguard_root,
+        sample_size = if (!isTRUE(F_RUN_ALL)) 100 else NULL
+      ),
     ),
-
-    # 1. Transformation ------
     tar_target(
-      bodyguard_file_meta,
-      bg_file_meta(raw_box_ecg_files),
-      pattern = map(raw_box_ecg_files),
+      ecg_files_subset,
+      bg_filter_recordings(
+        raw_box_ecg_files,
+        ecg_sessions_meta,
+        run_all = isTRUE(F_RUN_ALL)
+      )
+    ),
+    tar_target(
+      ecg_recording_meta,
+      bg_ecg_recording_meta(ecg_files_subset),
+      pattern = map(ecg_files_subset),
       iteration = "list"
     ),
     tar_target(
-      scanned_bodyguard_files,
-      bg_scan_into_lake_cache(
-        bodyguard_file_meta,
+      ecg_recordings_meta,
+      bg_import_ecg_to_lake(
+        ecg_recording_meta,
         root_dir = box_path("ptl_irrrd_bio", "bodyguard")
       ),
-      pattern = map(bodyguard_file_meta),
+      pattern = map(ecg_recording_meta),
       iteration = "list"
     ),
-    # tar_target(
-    #   bodyguard_file_meta_all,
-    #   bodyguard_file_meta |>
-    #     discard(is.null) |>
-    #     tidytable::bind_rows() |>
-    #     # Post-hoc changes
-    #     tidytable::mutate(
-    #       device_id = gsub("^(BG\\d{8}).*$", "\\1", device_id),
-    #     )
-    # ),
+    tar_target(
+      ecg_recordings,
+      ecg_recording_meta |>
+        discard(is.null) |>
+        tidytable::bind_rows() |>
+        tidytable::left_join(
+          ecg_recordings_meta |>
+            discard(is.null) |>
+            tidytable::bind_rows() |>
+            tidytable::select(-path),
+          by = "id"
+        ) |>
+        tidytable::arrange(id_session, sequence)
+    ),
     tar_target(
       esense_meta_all,
       esense_file_meta(raw_box_esense_files, esense_root = box_esense_root),
@@ -134,6 +143,21 @@ if (!is.null(box_root())) {
         unique() |>
         tidytable::arrange(mirage_pid, start_time) |>
         tidytable::mutate(id = seq_len(.N))
+    ),
+    tar_target(
+      raw_mirage_events,
+      read_mirage_events(raw_box_mirage_files),
+      pattern = map(raw_box_mirage_files),
+      iteration = "list",
+    ),
+
+    # 1. Transformation ------
+    tar_target(
+      ecg_session_windows,
+      bg_ecg_session_windows(
+        ecg_sessions_meta,
+        bg_root = box_bodyguard_root
+      ),
     ),
     tar_target(
       mirage_windows,

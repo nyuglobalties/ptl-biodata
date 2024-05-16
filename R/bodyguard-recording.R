@@ -1,8 +1,8 @@
-#' Read file metadata
+#' Read recording metadata
 #'
 #' @param path string - Path to CSV file
 #' @return ?data.frame(
-#'   asset_id: string,
+#'   id: string,
 #'   path: string,
 #'   sequence: integer(1),
 #'   device_id: string,
@@ -10,11 +10,12 @@
 #'   tz: string,
 #'   sampling_rate: double(1),
 #' )
-bg_file_meta <- function(path) {
+bg_ecg_recording_meta <- function(path) {
   stopifnot(is.character(path) && length(path) == 1)
 
   out <- data.table::data.table(
-    asset_id = bg_asset_id(path),
+    id = bg_recording_id(path),
+    id_session = bg_dir_id(path),
     path = path
   )
 
@@ -33,7 +34,7 @@ bg_file_meta <- function(path) {
   out |>
     tidytable::mutate(time_col = time_col) |>
     tidytable::select(
-      asset_id, path, sequence,
+      id, id_session, path, sequence,
       device_id, time_col, tz,
       sampling_rate
     )
@@ -46,15 +47,15 @@ bg_file_meta <- function(path) {
 #' creates partitioning columns (year and month), and saves out as
 #' as Hive-partitioned Parquet file.
 #'
-#' @param meta ?data.frame - Output of [bg_file_meta()]
+#' @param meta ?data.frame - Output of [bg_recording_meta()]
 #' @param root_dir string - The root directory of the Hive partition
 #' @param cache_root string ($projroot/_duckdb) - Where crew workers save out
 #'        intermediate data if needed
 #' @return data.frame(asset_id: string, path: string, hive_path: string) -
 #'         Record of where the ingested data is located
-bg_scan_into_lake_cache <- function(meta,
-                                    root_dir,
-                                    cache_root = here::here("_duckdb")) {
+bg_import_ecg_to_lake <- function(meta,
+                                  root_dir,
+                                  cache_root = here::here("_duckdb")) {
   if (is.null(meta)) {
     return(NULL)
   }
@@ -81,14 +82,14 @@ bg_scan_into_lake_cache <- function(meta,
     return(NULL)
   }
 
-  bg_asset_meta_df(
+  bg_recording_meta_df(
     path = meta$path,
-    hive_path = bg_write_parquet(conn, meta$asset_id, root_dir)
+    hive_path = bg_write_parquet(conn, meta$id, root_dir)
   )
 }
 
 bg_find_data_for_path <- function(path, root_dir) {
-  asset_id <- bg_asset_id(path)
+  recording_id <- bg_recording_id(path)
 
   found <- FALSE
   known_files <- data.table::data.table(
@@ -96,24 +97,26 @@ bg_find_data_for_path <- function(path, root_dir) {
   )
 
   known_files[, id := gsub("\\.parq(uet)?$", "", basename(file))]
-  found <- nrow(known_files[id == asset_id]) > 0
+  found <- nrow(known_files[id == recording_id]) > 0
 
   if (!found) {
     return(NULL)
   }
 
-  bg_asset_meta_df(path, known_files[id == asset_id, file])
+  bg_recording_meta_df(path, known_files[id == recording_id, file])
 }
 
-bg_asset_meta_df <- function(path, hive_path) {
+bg_recording_meta_df <- function(path, hive_path) {
   if (is.null(hive_path)) {
     return(NULL)
   }
 
   data.frame(
-    asset_id = bg_asset_id(path),
+    id = bg_recording_id(path),
     path = path,
-    hive_path = hive_path
+    hive_path = hive_path,
+    year = as.integer(gsub(".*year=(\\d+).*", "\\1", hive_path)),
+    month = as.integer(gsub(".*month=(\\d+).*", "\\1", hive_path))
   )
 }
 
@@ -159,26 +162,26 @@ bg_setup_tables_ <- function(conn, cache_paths) {
 }
 
 bg_read_local_time_csv <- function(conn, meta) {
-  asset_id <- meta$asset_id
+  id <- meta$id
 
   # Use a view to push down the operators directly to the CSV
   # and only use the worker file for spillover *if needed*
   rows <- DBI::dbExecute(
     conn,
     glue::glue("
-      CREATE OR REPLACE VIEW bodyguard AS
+      CREATE OR REPLACE TABLE bodyguard AS
       WITH cte AS (
         SELECT *
           , nextval('id_sequence') AS id
           , '{meta$tz}' AS tz
-          , '{asset_id}' AS asset_id
+          , '{id}' AS id_recording
         FROM '{meta$path}'
       ), cte1 AS (
         SELECT * EXCLUDE local_time
-          , epoch_ms(timezone('{meta$tz}', local_time)) AS t
+          , timezone('UTC', timezone('{meta$tz}', local_time)) AS t
         FROM cte
       )
-      SELECT asset_id
+      SELECT id_recording
         , id, t
         , ecg, ecg_mV
       FROM cte1;
@@ -189,16 +192,16 @@ bg_read_local_time_csv <- function(conn, meta) {
 }
 
 bg_read_timestamped_csv <- function(conn, meta) {
-  asset_id <- meta$asset_id
+  id <- meta$id
 
   rows <- DBI::dbExecute(
     conn,
     glue::glue("
-      CREATE OR REPLACE VIEW bodyguard AS
+      CREATE OR REPLACE TABLE bodyguard AS
       WITH cte AS (
         SELECT *
           , nextval('id_sequence') AS id
-          , '{asset_id}' AS asset_id
+          , '{id}' AS id_recording
         FROM '{meta$path}'
       ), cte1 AS (
         SELECT *,
@@ -206,12 +209,12 @@ bg_read_timestamped_csv <- function(conn, meta) {
         FROM cte
       ), cte2 AS (
         SELECT * EXCLUDE (timestamp, year)
-          , CASE WHEN year > 3000 THEN epoch_ms(epoch_ms(timestamp::BIGINT))
-              ELSE epoch_ms(to_timestamp(timestamp))
+          , CASE WHEN year > 3000 THEN epoch_ms(timestamp::BIGINT)
+              ELSE to_timestamp(timestamp)
             END AS t
         FROM cte1
       )
-      SELECT asset_id
+      SELECT id_recording
         , id, t
         , ecg, ecg_mV
       FROM cte2;
@@ -235,14 +238,14 @@ bg_load_into_ddb <- function(conn, meta) {
   rows
 }
 
-bg_write_parquet <- function(conn, asset_id, root_dir) {
+bg_write_parquet <- function(conn, id, root_dir) {
   DBI::dbExecute(
     conn,
     glue::glue("
       CREATE TEMP VIEW tmp AS
       SELECT *
-        , (t - (first(t) OVER (
-          PARTITION BY asset_id
+        , millisecond(t - (first(t) OVER (
+          PARTITION BY id_recording
           ORDER BY t ASC
         ))) / 1000 AS offset_secs
       FROM bodyguard;
@@ -252,9 +255,9 @@ bg_write_parquet <- function(conn, asset_id, root_dir) {
   res <- DBI::dbGetQuery(
     conn,
     "
-    SELECT date_part('year', ts) AS year
-      , date_part('month', ts) AS month
-    FROM (SELECT to_timestamp(t / 1000) AS ts FROM tmp)
+    SELECT date_part('year', t) AS year
+      , date_part('month', t) AS month
+    FROM tmp
     LIMIT 1;
     "
   )
@@ -271,7 +274,7 @@ bg_write_parquet <- function(conn, asset_id, root_dir) {
     root_dir,
     glue::glue("year={year}"),
     glue::glue("month={month}"),
-    glue::glue("{asset_id}.parquet")
+    glue::glue("{id}.parquet")
   )
 
   if (!dir.exists(dirname(hive_path))) {
@@ -288,22 +291,9 @@ bg_write_parquet <- function(conn, asset_id, root_dir) {
   hive_path
 }
 
-bg_asset_id <- function(path) {
+bg_recording_id <- function(path) {
   digest::digest(path, algo = "xxhash64")
 }
-
-bg_cache_file_from_id <- function(cache_id, cache_root) {
-  stopifnot(is.character(cache_root) && length(cache_root) == 1)
-
-  cache_dirname <- substr(cache_id, 1, 2)
-  cache_basename <- paste0(
-    substr(cache_id, 3, nchar(cache_id)),
-    ".duckdb"
-  )
-
-  file.path(cache_root, cache_dirname, cache_basename)
-}
-
 
 bg_parse_file_header_ <- function(dat) {
   stopifnot(data.table::is.data.table(dat))

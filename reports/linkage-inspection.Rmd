@@ -6,6 +6,7 @@ output: html_notebook
 ```{r, include=FALSE}
 if (interactive()) {
   targets::tar_config_set(store = here::here("_targets"))
+  source(here::here("projects/prelude.R"))
 }
 ```
 
@@ -17,7 +18,7 @@ In theory, eSense and Mirage were collected on the same tablet, so the clock tim
 ```{r}
 targets::tar_load(esense_meta)
 targets::tar_load(mirage_windows)
-targets::tar_load(bodyguard_file_meta_all)
+targets::tar_load(bg_files)
 
 # Using DuckDB
 conn <- duckdb::dbConnect(duckdb::duckdb(), ":memory:")

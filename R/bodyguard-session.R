@@ -1,99 +1,354 @@
-ecg_meta_dt <- function(paths, bg_root) {
+bg_ecg_session_meta <- function(bg_files, bg_root, sample_size = NULL, seed = 0xABBA) {
+  dir_paths <- dirname(bg_files)
+  dir_ids <- bg_dir_id(bg_files)
+
   bg_root_abs <- box_path(bg_root)
   explode_rel_path <- \(x) explode_path(gsub(bg_root_abs, "", x, fixed = TRUE))
+  exploded_rel_path <- lapply(dir_paths, explode_rel_path)
+  respondent_cat <- viapply(exploded_rel_path, \(ex) {
+    ex[1] |>
+      gsub("^([0-9_]+)\\..*", "\\1", x = _) |>
+      gsub("_", "", x = _) |>
+      as.integer()
+  })
 
-  out <- data.table::data.table(
-    path = paths
+  out <- tidytable::tidytable(
+    id = dir_ids,
+    path = dir_paths,
+    respondent_cat = respondent_cat
+  )
+
+  if (!is.null(sample_size)) {
+    rows <- withr::with_seed(seed = seed, {
+      sample(seq_len(nrow(out)), sample_size)
+    })
+
+    out <- out[rows]
+  }
+
+  unique(out)
+}
+
+bg_ecg_session_windows <- function(sessions, bg_root) {
+  dir_ids <- sessions$id
+  dir_paths <- sessions$path
+  bg_root_abs <- box_path(bg_root)
+
+  explode_rel_path <- \(x) explode_path(gsub(bg_root_abs, "", x, fixed = TRUE))
+  exploded_rel_path <- lapply(dir_paths, explode_rel_path)
+
+  dat <- tidytable::tidytable(
+    id_session = dir_ids,
+    exploded_rel_path = exploded_rel_path
   ) |>
-    tidytable::filter(grepl("ecg\\.csv$", path)) |>
+    tidytable::unnest(exploded_rel_path) |>
+    tidytable::select(id_session, value = exploded_rel_path) |>
     tidytable::mutate(
-      size = vdapply(path, \(x) file.info(x)$size),
-      exploded_rel_path = lapply(path, explode_rel_path),
-      respondent_cat = viapply(exploded_rel_path, \(ex) {
-        ex[1] |>
-          gsub("^([0-9_]+)\\..*", "\\1", x = _) |>
-          gsub("_", "", x = _) |>
-          as.integer()
-      }),
-      csv_meta = lapply(path, parse_ecg_file_meta),
-      sampling_rate = viapply(csv_meta, \(x) x$sampling_rate),
-      locale = vcapply(csv_meta, \(x) x$locale),
-      device_id = vcapply(csv_meta, \(x) x$device_id),
+      attribute = tidytable::case_when(
+        grepl("^\\d{8}$", value) ~ "date_str",
+        grepl("^\\d{5,6}[MC]?$", toupper(value)) ~ "participant_str",
+        grepl("^[0-9_]+\\. ", value) ~ "respondent_cat",
+        value %in% c("Birth_follow_up_mother", "Mother") ~ "participant_type",
+        value %in% c("Birth_follow_up_child", "Child") ~ "participant_type",
+        TRUE ~ NA_character_
+      ),
+      .before = value
+    ) |>
+    tidytable::mutate(id = 1:.N) |>
+    tidytable::relocate(id)
+
+  known_attrs <- tidytable::filter(dat, !is.na(attribute))
+
+  unknown_attrs <- dat |>
+    tidytable::filter(is.na(attribute)) |>
+    tidytable::mutate(
+      value = toupper(value),
+      to_split_1 = grepl("\\d{2} ?([AP]M)?\\s+\\d{5,6}[CM]?[CM]?_", value),
+      to_split_2 = grepl("\\d{2} ?([AP]M)?\\([A-Z0-9 ]+\\)\\s+\\d{5,6}[CM]?[CM]?_", value),
+      to_split = to_split_1 | to_split_2,
     ) |>
     tidytable::mutate(
-      size_ok = size > 1e3 & size < 3e7,
-      .after = size
+      value = tidytable::if_else(
+        to_split_1,
+        gsub(
+          "(\\d{2}) ?([AP]M)?\\s+(\\d{5,6}[CM]?[CM]?_)",
+          "\\1\\2\t\\3",
+          value
+        ),
+        value
+      ),
+      # Annoying parenthetical statements that *hopefully* don't
+      # require writing a parser
+      value = tidytable::if_else(
+        to_split_2,
+        gsub(
+          "(\\d{2}) ?([AP]M)?\\(([A-Z0-9 ]+)\\)\\s+(\\d{5,6}[CM]?[CM]?_)",
+          "\\1\\2(\\3)\t\\4",
+          value
+        ),
+        value
+      ),
+      to_split_1 = NULL,
+      to_split_2 = NULL,
+    )
+
+  windows <- unknown_attrs |>
+    tidytable::filter(to_split == TRUE) |>
+    tidytable::select(id, value) |>
+    tidytable::summarize(
+      value = strsplit(value, "\\t"),
+      .by = id
     ) |>
-    bg_parse_date_and_participants() |>
-    bg_parse_file_sequence()
+    tidytable::transmute(
+      data = lapply(value, \(w_strs) data.frame(value = w_strs, id_win = seq_along(w_strs))),
+      .by = id
+    ) |>
+    tidytable::unnest(data) |>
+    tidytable::bind_rows(
+      unknown_attrs |>
+        tidytable::filter(to_split == FALSE) |>
+        tidytable::select(id, value) |>
+        tidytable::mutate(id_win = 1L)
+    ) |>
+    bg_fix_window_strs() |>
+    bg_parse_window_attrs()
+
+  combined <- unknown_attrs |>
+    tidytable::select(id, id_session) |>
+    tidytable::right_join(windows, by = "id") |>
+    tidytable::bind_rows(known_attrs) |>
+    tidytable::mutate(
+      id_win = tidytable::replace_na(id_win, 1),
+      priority = tidytable::replace_na(priority, 1000),
+    ) |>
+    tidytable::arrange(id_session, id_win, priority) |>
+    bg_window_repair_rescat() |>
+    bg_window_repair_datestr() |>
+    bg_window_repair_participant_str() |>
+    bg_window_repair_participant_type() |>
+    # Keep lowest priority per attribute
+    # Window strings have lower priority to address
+    # finer granularity in detail.
+    tidytable::mutate(
+      value = do.call(tidytable::coalesce, as.list(value)),
+      priority = seq_len(.N),
+      .by = c("id_session", "id_win", "attribute")
+    ) |>
+    tidytable::filter(priority == 1) |>
+    tidytable::select(-id, -priority)
+
+  out <- combined |>
+    tidytable::pivot_wider(
+      names_from = "attribute",
+      id_cols = c("id_session", "id_win")
+    ) |>
+    tidytable::arrange(id_session, id_win) |>
+    tidytable::mutate(
+      respondent_cat = do.call(tidytable::coalesce, as.list(respondent_cat)),
+      year = do.call(tidytable::coalesce, as.list(year)),
+      month = do.call(tidytable::coalesce, as.list(month)),
+      day = do.call(tidytable::coalesce, as.list(day)),
+      .by = id_session
+    ) |>
+    tidytable::mutate(
+      respondent_cat = as.integer(respondent_cat),
+      year = as.integer(year),
+      month = as.integer(month),
+      day = as.integer(day),
+    ) |>
+    tidytable::filter(!is.na(participant))
 
   out
 }
 
-parse_ecg_file_meta <- function(f) {
-  stopifnot(is.character(f))
+bg_filter_recordings <- function(recordings, sessions, run_all = FALSE) {
+  out <- recordings
+  dir_ids <- bg_dir_id(out)
 
-  meta <- readLines(f, n = 15) |>
-    purrr::keep(\(x) grepl("^\\# ", x))
+  if (!isTRUE(run_all)) {
+    out <- out[dir_ids %in% sessions$id]
+  }
 
-  # It would be nice if we could refer to the exact row,
-  # but idk if that's a guarantee
-  sampling_rate <- meta |>
-    grep("^\\# Sampling", x = _, value = TRUE) |>
-    gsub("^\\# Sampling\\:[ 0-9.s]+\\((\\d+) Hz\\)$", "\\1", x = _) |>
-    as_int()
-
-  locale <- meta |>
-    grep("^\\# Export timezone\\:", x = _, value = TRUE) |>
-    gsub("^\\# Export timezone\\: ([A-Za-z_/]+)$", "\\1", x = _)
-
-  device_id <- meta |>
-    grep("^\\# Device\\:", x = _, value = TRUE) |>
-    gsub("^\\# Device\\: ", "", x = _)
-
-  list(
-    sampling_rate = sampling_rate,
-    locale = locale,
-    device_id = device_id
-  )
+  out
 }
 
-bg_parse_file_sequence <- function(dat) {
-  dat |>
+bg_dir_id <- function(path) {
+  if (length(path) > 1) {
+    return(vcapply(path, bg_dir_id))
+  }
+
+  digest::digest(dirname(path), algo = "xxhash64")
+}
+
+bg_fix_window_strs <- function(windows) {
+  window_pattern <- "^\\d{5,6}[CMB]_\\d{1,2};\\d{2}[AP]M\\-\\d{1,2};\\d{2}[AP]M(\\([A-Z0-9 ]+\\))?$"
+
+  out <- windows |>
     tidytable::mutate(
-      sequence = tidytable::if_else(
-        grepl("_(\\d+)-ecg\\.csv$", path),
-        as.integer(gsub(".*(\\d+)-ecg\\.csv$", "\\1", path)),
-        1L
+      value = tidytable::case_when(
+        is.na(value) ~ value,
+        grepl("\\d{1,2}'\\d{2}[AP]M", value) ~ chartr("'", ";", value),
+        grepl("^\\d{5,6}_", value) ~ gsub("^(\\d{5,6})_", "\\1M_", value),
+        grepl("\\d{2}[AP]M;\\d{1,2};\\d{2}[AP]M", value) ~ gsub(
+          "(\\d{2}[AP]M);(\\d{1,2};\\d{2}[AP]M)", "\\1-\\2", value
+        ),
+        grepl("^SL_", value) ~ NA_character_,
+        grepl("^PIDGT", value) ~ NA_character_,
+        TRUE ~ value
+      )
+    )
+
+  if (any(!is.na(out$value) & !grepl(window_pattern, out$value))) {
+    if (interactive()) {
+      browser()
+    } else {
+      stop0("Unhandled broken window pattern!")
+    }
+  }
+
+  out
+}
+
+bg_parse_window_attrs <- function(windows) {
+  initial <- windows |>
+    tidytable::mutate(
+      participant = gsub("^(\\d{5,6}).*$", "\\1", value),
+      participant_type = gsub("^\\d{5,6}([MC]).*$", "\\1", value),
+      start = chartr(";", ":", gsub("^.*_(\\d{1,2};\\d{2}[AP]M)-.*$", "\\1", value)),
+      end = chartr(";", ":", gsub("^.*-(\\d{1,2};\\d{2}[AP]M)$", "\\1", value)),
+      respondent_cat = tidytable::case_when(
+        grepl("\\(6 MONTH.*$", value) ~ 7L,
+        grepl("\\(28 DAYS.*$", value) ~ 6L,
+        TRUE ~ NA_integer_,
+      )
+    )
+
+  if (any(!is.na(initial$value) & grepl("\\(.*$", initial$value) & is.na(initial$respondent_cat))) {
+    if (interactive()) {
+      browser()
+    } else {
+      stop0("Unhandled custom respondent_cat parenthetical statement!")
+    }
+  }
+
+  cols <- setdiff(names(initial), c("id", "id_win", "value"))
+
+  out <- initial |>
+    tidytable::select(-value) |>
+    tidytable::pivot_longer(
+      cols = tidyselect::all_of(cols),
+      names_to = "attribute",
+      values_to = "value"
+    ) |>
+    tidytable::filter(!(attribute == "respondent_cat" & is.na(value))) |>
+    tidytable::mutate(
+      priority = tidytable::if_else(
+        attribute == "respondent_cat",
+        0,
+        100
+      )
+    )
+
+  out
+}
+
+bg_window_repair_rescat <- function(windows) {
+  rescats <- windows |>
+    tidytable::filter(attribute == "respondent_cat") |>
+    tidytable::mutate(
+      value = tidytable::if_else(
+        grepl("^[0-9_]\\..*$", value),
+        value |>
+          gsub("^([0-9_])\\..*", "\\1", x = _) |>
+          gsub("_", "", x = _),
+        value
+      )
+    )
+
+  windows |>
+    tidytable::filter(attribute != "respondent_cat") |>
+    tidytable::bind_rows(rescats)
+}
+
+bg_window_repair_datestr <- function(windows) {
+  date_strs <- windows |>
+    tidytable::filter(attribute == "date_str") |>
+    tidytable::mutate(
+      date = lubridate::ymd(value),
+      year = lubridate::year(date),
+      month = lubridate::month(date),
+      day = lubridate::day(date),
+      date = NULL,
+    ) |>
+    tidytable::select(id, id_session, id_win, priority, year, month, day)
+
+  cols <- setdiff(names(date_strs), c("id", "id_session", "id_win", "priority"))
+
+  attr_table <- date_strs |>
+    tidytable::pivot_longer(
+      cols = tidyselect::all_of(cols),
+      names_to = "attribute",
+      values_to = "value"
+    )
+
+  windows |>
+    tidytable::filter(attribute != "date_str") |>
+    tidytable::bind_rows(attr_table)
+}
+
+bg_window_repair_participant_str <- function(windows) { # nolint
+  part_strs <- windows |>
+    tidytable::filter(attribute == "participant_str") |>
+    tidytable::mutate(
+      participant = gsub("^(\\d{5,6}).*$", "\\1", value),
+      participant_type_match = grepl("[CM][CM]?$", value),
+      participant_type = tidytable::if_else(
+        participant_type_match,
+        gsub("^.*([CM][CM]?)$", "\\1", value),
+        "ignore"
       ),
-      .after = path,
+      participant_type = tidytable::if_else(
+        participant_type %in% c("MC", "CM"),
+        "B",
+        participant_type
+      ),
+      participant_type_match = NULL,
+    ) |>
+    tidytable::select(
+      id, id_session, id_win,
+      priority, participant, participant_type
+    )
+
+  cols <- setdiff(names(part_strs), c("id", "id_session", "id_win", "priority"))
+
+  windows |>
+    tidytable::filter(attribute != "participant_str") |>
+    tidytable::bind_rows(
+      part_strs |>
+        tidytable::pivot_longer(
+          cols = tidyselect::all_of(cols),
+          names_to = "attribute",
+          values_to = "value"
+        ) |>
+        tidytable::filter(value != "ignore")
     )
 }
 
-bg_parse_date_and_participants <- function(dat) {
-  dat |>
-    tidytable::mutate(
-      exp_path_2 = vcapply(exploded_rel_path, \(x) x[2]),
-      exp_path_3 = vcapply(exploded_rel_path, \(x) x[3]),
-      date = tidytable::case_when(
-        grepl("^\\d{8}$", exp_path_2) ~ lubridate::ymd(exp_path_2),
-        grepl("^\\d{8}$", exp_path_3) ~ lubridate::ymd(exp_path_3),
-        TRUE ~ as.Date(NA_real_)
-      ),
-      # There can be multiple participants per file group allegedly
-      # so we need to capture all (mother, child, plus optional twin)
-      mirage_pid_1 = tidytable::case_when(
-        grepl("^\\d{8}$", exp_path_2) & grepl("^\\d{5,6}$", exp_path_3) ~ exp_path_3,
-        TRUE ~ NA_character_,
-      ),
-      participant_type_1 = tidytable::case_when(
-        exp_path_2 %in% c("Birth_follow_up_child", "Child") ~ "child",
-        exp_path_2 %in% c("Birth_follow_up_mother", "Mother") ~ "mother",
-        TRUE ~ NA_character_
-      ),
-      .after = path,
-    ) |>
-    bg_prep_window_names()
+bg_window_repair_participant_type <- function(windows) { # nolint
+  windows |>
+    tidytable::filter(attribute != "participant_type") |>
+    tidytable::bind_rows(
+      windows |>
+        tidytable::filter(attribute == "participant_type") |>
+        tidytable::mutate(
+          value = tidytable::case_when(
+            is.na(value) ~ value,
+            grepl("child", tolower(value)) ~ "C",
+            grepl("mother", tolower(value)) ~ "M",
+            TRUE ~ value
+          )
+        )
+    )
 }
 
 bg_prep_window_names <- function(dat) {
@@ -463,87 +718,6 @@ bg_prep_window_names <- function(dat) {
       exp_path_3
     )
   ]
-
-  dat
-}
-
-#' Find the maximum time limits of a Bodyguard file
-#'
-#' Since these CSVs can be quite large, this function uses
-#' DuckDB to scan only the relevant parts of the files.
-#' Using data.table::fread(select) is too slow for the number
-#' of files needed to be processed.
-#'
-#' @param path path - Path to a CSV to scan
-bg_scan_file_limits <- function(path) {
-  conn <- duckdb::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
-
-  possible_time_cols <- c("timestamp", "local_time")
-  table_header <- tryCatch(
-    DBI::dbGetQuery(
-      conn,
-      glue::glue("SELECT * FROM '{path}' LIMIT 1")
-    ),
-    error = function(e) {
-      e
-    }
-  )
-
-  if (rlang::is_error(table_header)) {
-    return(list(
-      res = list(NULL),
-      err = table_header
-    ))
-  }
-
-  cols <- names(table_header)
-
-  if (!any(possible_time_cols %in% cols)) {
-    stop0(
-      "Unknown time column. Columns:\n",
-      paste0(paste0("  - '", cols, "'"), collapse = "\n")
-    )
-  }
-
-  time_col <- possible_time_cols[possible_time_cols %in% cols]
-
-  start <- DBI::dbGetQuery(
-    conn,
-    glue::glue("SELECT {time_col} FROM '{path}' ORDER BY 1 ASC LIMIT 1")
-  )[[1]]
-
-  end <- DBI::dbGetQuery(
-    conn,
-    glue::glue("SELECT {time_col} FROM '{path}' ORDER BY 1 DESC LIMIT 1")
-  )[[1]]
-
-  list(
-    res = data.table::data.table(
-      path = path,
-      start = start,
-      end = end
-    ),
-    err = list(NULL)
-  )
-}
-
-bg_prepare_file_limits <- function(limits) {
-  if (!is.data.frame(limits$res)) {
-    return(NULL)
-  }
-
-  dat <- limits$res
-  dat <- dat |>
-    tidytable::mutate(mode = "local_time")
-
-  if (!"POSIXt" %in% class(dat$start)) {
-    dat <- dat |>
-      tidytable::mutate(
-        start = as.POSIXct(start, origin = "1970-01-01"),
-        end = as.POSIXct(end, origin = "1970-01-01"),
-        mode = "unix_timestamp",
-      )
-  }
 
   dat
 }
