@@ -89,7 +89,8 @@ if (!is.null(box_root())) {
       bg_ecg_session_meta(
         raw_box_ecg_files,
         bg_root = box_bodyguard_root,
-        sample_size = if (!isTRUE(F_RUN_ALL)) 100 else NULL
+        # TRUE by default! Do `Sys.setenv(F_RUN_ALL = "FALSE")` to run in test mode
+        sample_size = if (!isTRUE(F_RUN_ALL)) 2000 else NULL
       ),
     ),
     tar_target(
@@ -107,10 +108,14 @@ if (!is.null(box_root())) {
       iteration = "list"
     ),
     tar_target(
+      bucket_bg_dir,
+      box_path("ptl_irrrd_bio", "bodyguard")
+    ),
+    tar_target(
       ecg_recordings_meta,
       bg_import_ecg_to_lake(
         ecg_recording_meta,
-        root_dir = box_path("ptl_irrrd_bio", "bodyguard")
+        root_dir = bucket_bg_dir
       ),
       pattern = map(ecg_recording_meta),
       iteration = "list"
@@ -153,6 +158,25 @@ if (!is.null(box_root())) {
 
     # 1. Transformation ------
     tar_target(
+      bucket_partitions,
+      {
+        dat <- ecg_recordings |>
+          tidytable::filter(!is.na(year)) |>
+          tidytable::select(year, month) |>
+          unique()
+
+        lapply2(dat$year, dat$month, \(yr, mon) {
+          list(
+            year = yr,
+            month = mon,
+            recordings = ecg_recordings |>
+              tidytable::filter(year == yr, month == mon) |>
+              tidytable::pull(id)
+          )
+        })
+      }
+    ),
+    tar_target(
       ecg_session_windows,
       bg_ecg_session_windows(
         ecg_sessions_meta,
@@ -169,6 +193,23 @@ if (!is.null(box_root())) {
       combined_esense_mirage,
       combine_esense_mirage(esense_meta, mirage_windows)
     ),
+    tar_target(
+      linked_ecg_recordings,
+      link_ecg_to_mirage(
+        partition = bucket_partitions,
+        recordings = ecg_recordings,
+        sessions = ecg_session_windows,
+        mirage = mirage_windows,
+        hive_dir = bucket_bg_dir
+      ),
+      pattern = map(bucket_partitions),
+      iteration = "list",
+      # To prevent massive OOMs that crash your computer, only run on the main
+      # process. This blocks progress for the rest of the pipeline, of course,
+      # but it allows multithreading for DuckDB.
+      deployment = "main"
+    ),
+
     # 2. Loading ------
 
     # 4. Reports ------

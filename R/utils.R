@@ -6,6 +6,10 @@ stop0 <- function(...) {
   stop(..., call. = FALSE)
 }
 
+todo <- function() {
+  stop0("To do!")
+}
+
 stopg <- function(x, .envir = parent.frame()) {
   stop0(
     glue::glue(

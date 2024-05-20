@@ -29,8 +29,8 @@ mirage_process_windows <- function(events) {
     tidytable::unnest() |>
     tidytable::ungroup() |>
     tidytable::mutate(
-      start = as.POSIXct(as.numeric(start) / 1000, origin = "1970-01-01"),
-      end = as.POSIXct(as.numeric(end) / 1000, origin = "1970-01-01"),
+      start = lubridate::force_tz(lubridate::as_datetime(as.numeric(start) / 1000), "UTC"),
+      end = lubridate::force_tz(lubridate::as_datetime(as.numeric(end) / 1000), "UTC"),
       length = difftime(end, start, units = "secs"),
     ) |>
     # Only include windows that *could* include baseline events (>30s)

@@ -63,16 +63,18 @@ bg_ecg_session_windows <- function(sessions, bg_root) {
     tidytable::filter(is.na(attribute)) |>
     tidytable::mutate(
       value = toupper(value),
-      to_split_1 = grepl("\\d{2} ?([AP]M)?\\s+\\d{5,6}[CM]?[CM]?_", value),
+      to_split_1 = grepl("\\d{1,2} ?([AP]M)?\\s+,?\\d{5,6}[CM]?[CM]? ?_", value),
       to_split_2 = grepl("\\d{2} ?([AP]M)?\\([A-Z0-9 ]+\\)\\s+\\d{5,6}[CM]?[CM]?_", value),
-      to_split = to_split_1 | to_split_2,
+      to_split_3 = grepl("^\\d{5},\\d{5}$", value),
+      to_split_4 = grepl("^PID[A-Z0-9]+  PID[A-Z0-9]+$", value),
+      to_split = to_split_1 | to_split_2 | to_split_3 | to_split_4,
     ) |>
     tidytable::mutate(
       value = tidytable::if_else(
         to_split_1,
         gsub(
-          "(\\d{2}) ?([AP]M)?\\s+(\\d{5,6}[CM]?[CM]?_)",
-          "\\1\\2\t\\3",
+          "(\\d{1,2}) ?([AP]M)?\\s+,?(\\d{5,6}[CM]?[CM]?) ?(_)",
+          "\\1\\2\t\\3\\4",
           value
         ),
         value
@@ -88,9 +90,31 @@ bg_ecg_session_windows <- function(sessions, bg_root) {
         ),
         value
       ),
+      value = tidytable::if_else(
+        to_split_3,
+        chartr(",", "\t", value),
+        value
+      ),
+      value = tidytable::if_else(
+        to_split_4, gsub("\\s+", "\t", value), value
+      ),
       to_split_1 = NULL,
       to_split_2 = NULL,
+      to_split_3 = NULL,
+      to_split_4 = NULL,
     )
+
+  bad_unknown_attrs <- !is.na(unknown_attrs$value) &
+    grepl("\\s{2,}", unknown_attrs$value) &
+    !grepl("\\t", unknown_attrs$value)
+
+  if (any(bad_unknown_attrs)) {
+    if (interactive()) {
+      browser()
+    } else {
+      stop0("Unhandled multi-session label!")
+    }
+  }
 
   windows <- unknown_attrs |>
     tidytable::filter(to_split == TRUE) |>
@@ -156,7 +180,8 @@ bg_ecg_session_windows <- function(sessions, bg_root) {
       month = as.integer(month),
       day = as.integer(day),
     ) |>
-    tidytable::filter(!is.na(participant))
+    tidytable::filter(!is.na(participant)) |>
+    tidytable::mutate(id = seq_len(.N))
 
   out
 }
@@ -181,10 +206,13 @@ bg_dir_id <- function(path) {
 }
 
 bg_fix_window_strs <- function(windows) {
-  window_pattern <- "^\\d{5,6}[CMB]_\\d{1,2};\\d{2}[AP]M\\-\\d{1,2};\\d{2}[AP]M(\\([A-Z0-9 ]+\\))?$"
+  window_pattern <- "^1?\\d{5}[CMB][CM]?(_\\d{1,2};\\d{2}[AP]M\\-\\d{1,2};\\d{2}[AP]M(\\([A-Z0-9 ]+\\))?)?$"
 
   out <- windows |>
     tidytable::mutate(
+      value = chartr(".", ";", value),
+      value = chartr(",", ";", value),
+      value = chartr("'", ";", value),
       value = tidytable::case_when(
         is.na(value) ~ value,
         grepl("\\d{1,2}'\\d{2}[AP]M", value) ~ chartr("'", ";", value),
@@ -192,10 +220,144 @@ bg_fix_window_strs <- function(windows) {
         grepl("\\d{2}[AP]M;\\d{1,2};\\d{2}[AP]M", value) ~ gsub(
           "(\\d{2}[AP]M);(\\d{1,2};\\d{2}[AP]M)", "\\1-\\2", value
         ),
+        grepl("^\\d{5}$", value) ~ paste0(value, "M"),
         grepl("^SL_", value) ~ NA_character_,
         grepl("^PIDGT", value) ~ NA_character_,
         TRUE ~ value
-      )
+      ),
+      # Delimiter fixes
+      value = tidytable::case_when(
+        grepl("-\\d{4}[AP]M", value) ~ gsub("(-\\d{2})(\\d{2}[AP]M)", "\\1;\\2", value),
+        grepl("_\\d{1,2};\\d{2}[AP]M;\\d{1,2};\\d{2}[AP]M$", value) ~ gsub(
+          "(_\\d{1,2};\\d{2}[AP]M);(\\d{1,2};\\d{2}[AP]M)$", "\\1-\\2", value
+        ),
+        grepl("\\d{2};[AP]M", value) ~ gsub(
+          "(\\d{2});([AP]M)", "\\1\\2", value
+        ),
+        grepl("[AP]M_\\d{1,2};", value) ~ gsub(
+          "([AP]M)_(\\d{1,2};)", "\\1-\\2", value
+        ),
+        grepl("-\\d{1,2}-\\d{2}[AP]M", value) ~ gsub("(-\\d{1,2})-(\\d{2}[AP]M)", "\\1;\\2", value),
+        grepl("^\\d{5,6}[CM]\\d{1,2};\\d{2}[AP]M", value) ~ gsub(
+          "^(\\d{5,6}[MC])(\\d{1,2};\\d{2}[AP]M)", "\\1_\\2", value
+        ),
+        grepl("\\d{1,2};\\d{2}[AP]M\\d{1,2};\\d{2}", value) ~ gsub(
+          "(\\d{1,2};\\d{2}[AP]M)(\\d{1,2};\\d{2})", "\\1-\\2", value
+        ),
+        TRUE ~ value
+      ),
+      # Meridian fixes
+      value = tidytable::case_when(
+        grepl("_0?\\d;\\d{2}-0?\\d;\\d{2}PM", value) ~ gsub(
+          "_(0?\\d;\\d{2})(-0?\\d;\\d{2}PM)", "_\\1PM\\2", value
+        ),
+        grepl("_0?\\d;\\d{2}PM-0?\\d;\\d{2}\\s*$", value) ~ gsub(
+          "_(0?\\d;\\d{2}PM)(-0?\\d;\\d{2})", "_\\1\\2PM", value
+        ),
+        grepl("_1[01];\\d{2}-1[01];\\d{2}AM", value) ~ gsub(
+          "_(1[01];\\d{2})(-1[01];\\d{2}AM)", "_\\1AM\\2", value
+        ),
+        grepl("_1[01];\\d{2}AM-1[01];\\d{2}\\s*$", value) ~ gsub(
+          "_(1[01];\\d{2}AM)(-1[01];\\d{2})", "_\\1\\2AM", value
+        ),
+        TRUE ~ value
+      ),
+      # Range fixes
+      value = tidytable::case_when(
+        grepl("_\\d{1,2};\\d{2}[AP]M\\d{1,2};\\d{2}[AP]M", value) ~ gsub(
+          "_(\\d{1,2};\\d{2}[AP]M)(\\d{1,2};\\d{2}[AP]M)", "_\\1-\\2", value
+        ),
+        grepl("_\\d{1,2};\\d{2}-[AP]M\\d{1,2};\\d{2}[AP]M", value) ~ gsub(
+          "_(\\d{1,2};\\d{2})-([AP]M)(\\d{1,2};\\d{2}[AP]M)", "_\\1\\2-\\3", value
+        ),
+        TRUE ~ value
+      ),
+      # Naked ranges
+      value = tidytable::case_when(
+        grepl("1[01];\\d{2}-1[01];\\d{2}$", value) ~ gsub(
+          "(1[01];\\d{2})(-1[01];\\d{2})", "\\1AM\\2AM", value
+        ),
+        grepl("12;\\d{2}-12;\\d{2}$", value) ~ gsub(
+          "(12;\\d{2})(-12;\\d{2})", "\\1PM\\2PM", value
+        ),
+        TRUE ~ value
+      ),
+      # Midday
+      value = tidytable::case_when(
+        grepl("12;\\d{2}PM-(12|0?1);\\d{2}$", value) ~ gsub(
+          "(12;\\d{2}PM-(?:12|0?1);\\d{2})$", "\\1PM", value
+        ),
+        grepl("12;\\d{2}-(12|0?1);\\d{2}PM\\s*$", value) ~ gsub(
+          "(12;\\d{2})(-(?:12|0?1);\\d{2}PM)\\s*$", "\\1PM\\2", value
+        ),
+        grepl("11;\\d{2}AM-11;\\d{2}$", value) ~ gsub(
+          "(11;\\d{2}AM-11;\\d{2})$", "\\1AM", value
+        ),
+        grepl("11;\\d{2}-11;\\d{2}AM$", value) ~ gsub(
+          "(11;\\d{2})(-11;\\d{2}AM)$", "\\1AM\\2", value
+        ),
+        grepl("11;\\d{2}AM-12;\\d{2}$", value) ~ gsub(
+          "(11;\\d{2}AM-12;\\d{2})$", "\\1PM", value
+        ),
+        grepl("11;\\d{2}-12;\\d{2}PM$", value) ~ gsub(
+          "(11;\\d{2})(-12;\\d{2}PM)$", "\\1AM\\2", value
+        ),
+        TRUE ~ value
+      ),
+      # Errant spaces
+      value = tidytable::case_when(
+        grepl("^\\d{5,6}[MC] _", value) ~ gsub("^(\\d{5,6}[MC]) _", "\\1_", value),
+        grepl("^\\d{5,6}[MC]_ ", value) ~ gsub("^(\\d{5,6}[MC])_ ", "\\1_", value),
+        grepl("[-_]\\d{1,2};\\d{2} [AP]M", value) ~ gsub(
+          "([-_]\\d{1,2};\\d{2}) ([AP]M)", "\\1\\2", value
+        ),
+        grepl("[AP]M -\\d{2};\\d{2}", value) ~ gsub(
+          "([AP]M) (-\\d{2};\\d{2})", "\\1\\2", value
+        ),
+        TRUE ~ value
+      ),
+      # Ad-hoc
+      value = tidytable::case_when(
+        grepl("^\\d{5,6}M_.*\\s+CHILD$", value) ~ gsub(
+          "^(\\d{5,6})M([^ ]*)\\s+CHILD$", "\\1C\\2", value
+        ),
+        grepl("^\\d{5}M_C(HILD)?$", value) ~ gsub("^(\\d{5})M_C(HILD)?", "\\1C", value),
+        grepl("^\\d{5}M_M$", value) ~ substr(value, 1, 6),
+        grepl("^\\d{5}M_BIRTH FOLLOWUP$", value) ~ substr(value, 1, 6),
+        grepl("PMP", value) ~ gsub("PMP", "PM", value),
+        # No 6-digit PIDs start with 2-9
+        grepl("^[2-9]\\d{3}00[CM]", value) ~ gsub("^([2-9]\\d{3})0(0[CM])", "\\1\\2", value),
+        grepl("-012", value) ~ gsub("-012", "-12", value),
+        grepl(";031", value) ~ gsub(";031", ";31", value),
+        grepl("110;4AM", value) ~ gsub("110;4AM", "11;04AM", value),
+        # Estimating these windows based on maximum possible width but hopefully
+        # Mirage will narrow it down
+        grepl("03;0PM", value) ~ gsub("03;0PM", "03;09PM", value),
+        grepl("11;4AM", value) ~ gsub("11;4AM", "11;49PM", value),
+        grepl("^\\d{5}M_.*\\(CHILD\\)$", value) ~ gsub("^(\\d{5})M(_.*)\\(CHILD\\)", "\\1C\\2", value),
+        grepl("\\s+TWIN BABY$", value) ~ gsub("\\s+TWIN BABY$", "", value),
+        grepl("\\(TWIN BABY\\)$", value) ~ gsub("\\(TWIN BABY\\)$", "", value),
+        grepl("\\(PREAGNANT WOMAN\\)$", value) ~ gsub("\\(PREAGNANT WOMAN\\)$", "", value),
+        grepl("^\\d{5} MOTHER", value) ~ paste0(substr(value, 1, 5), "M"),
+        grepl(" MOTHER$", value) ~ gsub("\\s+MOTHER$", "", value), # Cleanup
+        TRUE ~ value
+      ),
+      # Repeats for corner cases
+      value = tidytable::case_when(
+        grepl("12;\\d{2}PM-12;\\d{2}$", value) ~ gsub(
+          "(12;\\d{2}PM-12;\\d{2})$", "\\1PM", value
+        ),
+        grepl("12;\\d{2}-12;\\d{2}PM\\s*$", value) ~ gsub(
+          "(12;\\d{2})(-12;\\d{2}PM)\\s*$", "\\1PM\\2", value
+        ),
+        grepl("_0?\\d;\\d{2}-0?\\d;\\d{2}PM", value) ~ gsub(
+          "_(0?\\d;\\d{2})(-0?\\d;\\d{2}PM)", "_\\1PM\\2", value
+        ),
+        grepl("_0?\\d;\\d{2}PM-0?\\d;\\d{2}\\s*$", value) ~ gsub(
+          "_(0?\\d;\\d{2}PM)(-0?\\d;\\d{2})", "_\\1\\2PM", value
+        ),
+        TRUE ~ value
+      ),
     )
 
   if (any(!is.na(out$value) & !grepl(window_pattern, out$value))) {
@@ -214,11 +376,20 @@ bg_parse_window_attrs <- function(windows) {
     tidytable::mutate(
       participant = gsub("^(\\d{5,6}).*$", "\\1", value),
       participant_type = gsub("^\\d{5,6}([MC]).*$", "\\1", value),
-      start = chartr(";", ":", gsub("^.*_(\\d{1,2};\\d{2}[AP]M)-.*$", "\\1", value)),
-      end = chartr(";", ":", gsub("^.*-(\\d{1,2};\\d{2}[AP]M)$", "\\1", value)),
+      start = tidytable::if_else(
+        grepl("_\\d{1,2};\\d{2}[AP]M-\\d{1,2};\\d{2}[AP]M", value),
+        chartr(";", ":", gsub("^.*_(\\d{1,2};\\d{2}[AP]M)-.*$", "\\1", value)),
+        NA_character_
+      ),
+      end = tidytable::if_else(
+        grepl("_\\d{1,2};\\d{2}[AP]M-\\d{1,2};\\d{2}[AP]M", value),
+        chartr(";", ":", gsub("^.*-(\\d{1,2};\\d{2}[AP]M)(?:\\(.*\\))?$", "\\1", value)),
+        NA_character_
+      ),
       respondent_cat = tidytable::case_when(
         grepl("\\(6 MONTH.*$", value) ~ 7L,
         grepl("\\(28 DAYS.*$", value) ~ 6L,
+        grepl("\\(3RD", value) ~ 4L,
         TRUE ~ NA_integer_,
       )
     )
@@ -228,6 +399,22 @@ bg_parse_window_attrs <- function(windows) {
       browser()
     } else {
       stop0("Unhandled custom respondent_cat parenthetical statement!")
+    }
+  }
+
+  if (any(!is.na(initial$start) & !grepl("\\d{1,2}:\\d{2}[AP]M", initial$start))) {
+    if (interactive()) {
+      browser()
+    } else {
+      stop0("Incorrectly formatted window start timestamp")
+    }
+  }
+
+  if (any(!is.na(initial$end) & !grepl("\\d{1,2}:\\d{2}[AP]M", initial$end))) {
+    if (interactive()) {
+      browser()
+    } else {
+      stop0("Incorrectly formatted window end timestamp")
     }
   }
 

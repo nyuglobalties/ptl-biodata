@@ -147,9 +147,18 @@ bg_check_paths <- function(worker_id, cache_root = here::here("_duckdb")) {
   )
 }
 
-bg_create_connection <- function(cache_paths) {
+bg_create_connection <- function(cache_paths = NULL, dbdir = NULL) {
+  stopifnot(!is.null(cache_paths) || !is.null(dbdir))
+
+  path <- cache_paths$duckdb %||% dbdir
+
+  # Check on custom dbdir
+  if (!dir.exists(dirname(path))) {
+    dir.create(dirname(path), recursive = TRUE)
+  }
+
   ddb_connect(
-    dbdir = cache_paths$duckdb,
+    dbdir = path,
     read_only = FALSE,
     extensions = "icu"
   )
@@ -244,10 +253,10 @@ bg_write_parquet <- function(conn, id, root_dir) {
     glue::glue("
       CREATE TEMP VIEW tmp AS
       SELECT *
-        , millisecond(t - (first(t) OVER (
+        , datesub('ms', (first(t) OVER (
           PARTITION BY id_recording
           ORDER BY t ASC
-        ))) / 1000 AS offset_secs
+        )), t) / 1000 AS offset_secs
       FROM bodyguard;
     ")
   )
