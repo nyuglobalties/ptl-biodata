@@ -217,8 +217,38 @@ if (!is.null(box_root())) {
       linked_ecg_recordings,
       tidytable::bind_rows(separated_linked_ecg_recordings)
     ),
+    tar_target(
+      ecg_recording_limits,
+      create_bg_file_limits(
+        partition = bucket_partitions,
+        hive_dir = bucket_bg_dir
+      ),
+      pattern = map(bucket_partitions),
+      iteration = "list"
+    ),
 
     # 2. Loading ------
+    tar_target(
+      excel_workbooks,
+      workbook_for_partition(
+        partition = bucket_partitions,
+        linked_ecg_recordings = linked_ecg_recordings,
+        ecg_meta = ecg_recordings,
+        ecg_limits = ecg_recording_limits,
+        mirage_sessions = mirage_sessions,
+        mirage_windows = mirage_windows
+      ),
+      pattern = map(bucket_partitions),
+      iteration = "list"
+    ),
+    tar_target(
+      write_workbooks,
+      write_workbook(
+        excel_workbooks,
+        output_directory = box_path("ptl_irrrd_bio", "bg-excel")
+      ),
+      pattern = map(excel_workbooks)
+    ),
 
     # 4. Reports ------
     tar_render(

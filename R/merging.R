@@ -264,3 +264,31 @@ link_ecg_to_mirage <- function(partition,
 
   res
 }
+
+create_bg_file_limits <- function(partition, hive_dir) {
+  if (length(partition) == 1) {
+    partition <- partition[[1]]
+  }
+
+  stopifnot(is.numeric(partition$year) && is.numeric(partition$month))
+
+  year <- partition$year
+  month <- partition$month
+
+  db_dir <- file.path(hive_dir, glue::glue("year={year}"), glue::glue("month={month}"))
+  hive_parquet_glob <- file.path(db_dir, "*.parquet")
+
+  conn <- DBI::dbConnect(duckdb::duckdb(), ":memory:")
+  on.exit(DBI::dbDisconnect(conn))
+
+  DBI::dbGetQuery(
+    conn,
+    glue::glue("
+      SELECT id_recording
+        , min(t) AS t_min
+        , max(t) AS t_max
+      FROM read_parquet('{hive_parquet_glob}', hive_partitioning=true)
+      GROUP BY ALL;
+    ")
+  )
+}

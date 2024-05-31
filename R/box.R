@@ -9,7 +9,7 @@ box_root <- function(root = NULL) {
   root
 }
 
-box_path <- function(..., .box_root = NULL) {
+box_path <- function(..., .box_root = BOX_ROOT) {
   box_true_root <- box_root(root = .box_root)
 
   if (is.null(box_true_root)) {

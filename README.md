@@ -26,6 +26,11 @@ which handle most of the legwork.
 To execute the pipeline, run
 
 ```r
+# These environment variables need only be set once per R session
+# Sys.setenv(BOX_ROOT = "C:/Users/youruser/Box") <-- This might be able to be detected automatically
+Sys.setenv(SYNOLOGY_ROOT = "T:/Where/To/Save/Intermediate/Files")
+
+# This can be run as many times as you'd like per R session
 targets::tar_make()
 ```
 

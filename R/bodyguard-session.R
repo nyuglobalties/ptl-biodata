@@ -67,7 +67,8 @@ bg_ecg_session_windows <- function(sessions, bg_root) {
       to_split_2 = grepl("\\d{2} ?([AP]M)?\\([A-Z0-9 ]+\\)\\s+\\d{5,6}[CM]?[CM]?_", value),
       to_split_3 = grepl("^\\d{5},\\d{5}$", value),
       to_split_4 = grepl("^PID[A-Z0-9]+  PID[A-Z0-9]+$", value),
-      to_split = to_split_1 | to_split_2 | to_split_3 | to_split_4,
+      to_split_5 = grepl("\\d{1,2} ?([AP]M)?\\s+,?\\d{5,6}[CM]?[CM]? ?-", value),
+      to_split = to_split_1 | to_split_2 | to_split_3 | to_split_4 | to_split_5,
     ) |>
     tidytable::mutate(
       value = tidytable::if_else(
@@ -98,10 +99,20 @@ bg_ecg_session_windows <- function(sessions, bg_root) {
       value = tidytable::if_else(
         to_split_4, gsub("\\s+", "\t", value), value
       ),
+      value = tidytable::if_else(
+        to_split_5,
+        gsub(
+          "(\\d{1,2}) ?([AP]M)?\\s+,?(\\d{5,6}[CM]?[CM]?) ?(-)",
+          "\\1\\2\t\\3_",
+          value
+        ),
+        value
+      ),
       to_split_1 = NULL,
       to_split_2 = NULL,
       to_split_3 = NULL,
       to_split_4 = NULL,
+      to_split_5 = NULL,
     )
 
   bad_unknown_attrs <- !is.na(unknown_attrs$value) &
@@ -335,6 +346,9 @@ bg_fix_window_strs <- function(windows) {
         grepl("03;0PM", value) ~ gsub("03;0PM", "03;09PM", value),
         grepl("11;4AM", value) ~ gsub("11;4AM", "11;49PM", value),
         grepl("^\\d{5}M_.*\\(CHILD\\)$", value) ~ gsub("^(\\d{5})M(_.*)\\(CHILD\\)", "\\1C\\2", value),
+        grepl("-110;", value) ~ gsub("-110;", "-11;0", value),
+        grepl("_114;", value) ~ gsub("_114;", "_11;4", value),
+        grepl("11;\\d{2}PAM", value) ~ gsub("11;(\\d{2})PAM", "11;\\1AM", value),
         grepl("\\s+TWIN BABY$", value) ~ gsub("\\s+TWIN BABY$", "", value),
         grepl("\\(TWIN BABY\\)$", value) ~ gsub("\\(TWIN BABY\\)$", "", value),
         grepl("\\(PREAGNANT WOMAN\\)$", value) ~ gsub("\\(PREAGNANT WOMAN\\)$", "", value),
