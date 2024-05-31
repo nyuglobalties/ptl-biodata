@@ -100,3 +100,89 @@ mirage_process_participant_windows <- function(part_events) {
 
   tidytable::bind_rows(windows_no_null)
 }
+
+create_mirage_sessions <- function(mirage_windows) {
+  conn <- DBI::dbConnect(duckdb::duckdb(), ":memory:")
+  on.exit(DBI::dbDisconnect(conn))
+
+  duckdb::duckdb_register(conn, "mirage", mirage_windows)
+
+  DBI::dbExecute(conn, "CREATE OR REPLACE TEMP SEQUENCE idx START 1;")
+  DBI::dbGetQuery(conn, "
+    WITH m AS (
+      SELECT *
+        , date_trunc('day', start) AS date
+      FROM mirage
+    ), raw_pairs AS (
+      SELECT a.id AS id_a
+      , b.id AS id_b
+      FROM (SELECT id FROM m) a
+      , (SELECT id FROM m) b
+    ), adorned_pairs AS (
+      SELECT id_a, id_b
+      , a.start AS start_a
+      , a.date AS date_a
+      , a.mirage_pid AS mpid_a
+      , b.start AS start_b
+      , b.date AS date_b
+      , b.mirage_pid AS mpid_b
+      FROM raw_pairs
+      LEFT JOIN (SELECT id, start, date, mirage_pid FROM m) a
+        ON a.id = raw_pairs.id_a
+      LEFT JOIN (SELECT id, start, date, mirage_pid FROM m) b
+        ON b.id = raw_pairs.id_b
+    ), raw_diffs AS (
+      SELECT mpid_a AS mirage_pid
+        , date_a AS date
+        , id_a
+        , id_b
+        , start_a
+        , start_b
+        , date_diff('ms', start_a, start_b) / 1000 AS dt
+      FROM adorned_pairs
+      WHERE date_a = date_b AND mpid_a = mpid_b
+    ), cleaned_diffs AS (
+      SELECT * REPLACE (
+        CASE WHEN id_a = id_b AND start_a = start_b THEN NULL ELSE dt END AS dt
+      ) 
+      FROM raw_diffs
+    ), cte AS (
+      SELECT *
+        , mad(dt) OVER (
+          PARTITION BY mirage_pid, date, id_a
+        ) AS mad_dt
+      FROM cleaned_diffs c
+      LEFT JOIN (
+        SELECT mirage_pid, date, nextval('idx') AS id_session
+        FROM cleaned_diffs
+        GROUP BY 1, 2
+      ) s
+        USING (mirage_pid, date)
+      ORDER BY mirage_pid, date, id_a
+    ), cte2 AS (
+      SELECT *
+      FROM (
+        SELECT mirage_pid
+          , date
+          , COLUMNS('^id_')
+          , COLUMNS('^start_')
+          , dt
+          , mad_dt
+          , min(mad_dt) OVER (PARTITION BY id_session) AS min_mad_dt
+        FROM cte
+      ) 
+      WHERE mad_dt = min_mad_dt OR min_mad_dt IS NULL
+    ), cte3 AS (
+      SELECT *
+        , min(id_a) OVER (PARTITION BY id_session) AS id_event_root
+      FROM cte2
+    )
+    SELECT id_session
+      , mirage_pid
+      , date
+      , id_b AS id_event
+      , ifnull(abs(dt) < (60 * 60), true) AS valid_event
+    FROM cte3
+    WHERE id_a = id_event_root;
+  ")
+}

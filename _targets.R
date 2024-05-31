@@ -190,11 +190,15 @@ if (!is.null(box_root())) {
         mirage_process_windows(),
     ),
     tar_target(
+      mirage_sessions,
+      create_mirage_sessions(mirage_windows)
+    ),
+    tar_target(
       combined_esense_mirage,
       combine_esense_mirage(esense_meta, mirage_windows)
     ),
     tar_target(
-      linked_ecg_recordings,
+      separated_linked_ecg_recordings,
       link_ecg_to_mirage(
         partition = bucket_partitions,
         recordings = ecg_recordings,
@@ -208,6 +212,10 @@ if (!is.null(box_root())) {
       # process. This blocks progress for the rest of the pipeline, of course,
       # but it allows multithreading for DuckDB.
       deployment = "main"
+    ),
+    tar_target(
+      linked_ecg_recordings,
+      tidytable::bind_rows(separated_linked_ecg_recordings)
     ),
 
     # 2. Loading ------

@@ -73,8 +73,11 @@ link_ecg_to_mirage <- function(partition,
   mon <- partition$month
 
   db_dir <- file.path(hive_dir, glue::glue("year={yr}"), glue::glue("month={mon}"))
-  db_path <- file.path(
-    db_dir,
+  db_path <- synology_path(
+    "irrrd",
+    "bodyguard",
+    glue::glue("year={yr}"),
+    glue::glue("month={mon}"),
     "db.duckdb"
   )
 

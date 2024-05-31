@@ -19,11 +19,17 @@ In theory, eSense and Mirage were collected on the same tablet, so the clock tim
 targets::tar_load(esense_meta)
 targets::tar_load(mirage_windows)
 targets::tar_load(bg_files)
+targets::tar_load(linked_ecg_recordings)
 
 # Using DuckDB
 conn <- duckdb::dbConnect(duckdb::duckdb(), ":memory:")
 duckdb::duckdb_register(conn, "esense", esense_meta)
 duckdb::duckdb_register(conn, "mirage", mirage_windows)
+
+linked_recordings <- linked_ecg_recordings |>
+  tidytable::bind_rows()
+
+duckdb::duckdb_register(conn, "linked_bg_mirage", linked_recordings)
 ```
 
 Mirage comes in a stream of events. I have selected on the "play" and "baseline" events for now. They are processed using a stack to capture any nested events.
@@ -122,56 +128,121 @@ CREATE TABLE m AS SELECT *
 FROM mirage;
 ```
 
-What follows may be the ugliest query I have ever written.
+```{sql, connection = conn}
+CREATE OR REPLACE TEMP SEQUENCE idx START 1;
+```
 
 ```{sql, connection = conn}
-WITH cte AS (
-  SELECT me.row_mirage AS id
-    , true AS link
-  FROM me_merge_distinct me
-), cte1 AS (
-  SELECT m.id AS id
-    , m.mirage_pid AS mirage_pid
-    , m.date AS date
-    , m.event AS event
-    , m.start AS start
-    , ifnull(me.link, false) AS link
-  FROM m LEFT JOIN cte me ON m.id = me.id
-), id_tuples AS (
+CREATE TABLE mirage_sessions AS
+WITH raw_pairs AS (
   SELECT a.id AS id_a
-    , b.id AS id_b
-  FROM (SELECT id FROM cte1) a
-  FULL OUTER JOIN (SELECT id FROM cte1) b ON a.id <> b.id
-), linked_tuples AS (
-  SELECT id_tuples.id_a AS id_parent
-    , id_tuples.id_b AS id_child
-    , COLUMNS('_parent$')
-    , COLUMNS('_child$')
-    , @date_diff('minutes', start_parent, start_child) AS diff_start
-  FROM id_tuples
-  INNER JOIN (SELECT id FROM cte1 WHERE link) tmp ON tmp.id = id_tuples.id_a
+  , b.id AS id_b
+  FROM (SELECT id FROM m) a
+  , (SELECT id FROM m) b
+), adorned_pairs AS (
+  SELECT id_a, id_b
+  , a.start AS start_a
+  , a.date AS date_a
+  , a.mirage_pid AS mpid_a
+  , b.start AS start_b
+  , b.date AS date_b
+  , b.mirage_pid AS mpid_b
+  FROM raw_pairs
+  LEFT JOIN (SELECT id, "start", date, mirage_pid FROM m) a
+    ON a.id = raw_pairs.id_a
+  LEFT JOIN (SELECT id, "start", date, mirage_pid FROM m) b
+    ON b.id = raw_pairs.id_b
+), raw_diffs AS (
+  SELECT mpid_a AS mirage_pid
+    , date_a AS date
+    , id_a
+    , id_b
+    , start_a
+    , start_b
+    , date_diff('ms', start_a, start_b) / 1000 AS dt
+  FROM adorned_pairs
+  WHERE date_a = date_b AND mpid_a = mpid_b
+), cleaned_diffs AS (
+  SELECT * REPLACE (
+    CASE WHEN id_a = id_b AND start_a = start_b THEN NULL ELSE dt END AS dt
+  ) 
+  FROM raw_diffs
+), cte AS (
+  SELECT *
+    , mad(dt) OVER (
+      PARTITION BY mirage_pid, date, id_a
+    ) AS mad_dt
+  FROM cleaned_diffs c
   LEFT JOIN (
-    SELECT id
-      , mirage_pid AS mpid_parent
-      , date AS date_parent
-      , start AS start_parent
-    FROM cte1
-  ) tmp1 ON tmp1.id = id_tuples.id_a
-  LEFT JOIN (
-    SELECT id
-      , mirage_pid AS mpid_child
-      , date AS date_child
-      , start AS start_child
-    FROM cte1
-  ) tmp2 ON tmp2.id = id_tuples.id_b
-  WHERE mpid_parent = mpid_child
-    AND date_parent = date_child
+    SELECT mirage_pid, date, nextval('idx') AS id_session
+    FROM cleaned_diffs
+    GROUP BY 1, 2
+  ) s
+    USING (mirage_pid, date)
+  ORDER BY mirage_pid, date, id_a
+), cte2 AS (
+  SELECT *
+  FROM (
+    SELECT mirage_pid
+      , date
+      , COLUMNS('^id_')
+      , COLUMNS('^start_')
+      , dt
+      , mad_dt
+      , min(mad_dt) OVER (PARTITION BY id_session) AS min_mad_dt
+    FROM cte
+  ) 
+  WHERE mad_dt = min_mad_dt OR min_mad_dt IS NULL
+), cte3 AS (
+  SELECT *
+    , min(id_a) OVER (PARTITION BY id_session) AS id_event_root
+  FROM cte2
 )
-SELECT * FROM linked_tuples WHERE diff_start <= 30 LIMIT 100;
+SELECT id_session
+  , mirage_pid
+  , date
+  , id_b AS id_event
+  , ifnull(abs(dt) < (60 * 60), true) AS valid_event -- NULL would mean single event session
+FROM cte3
+WHERE id_a = id_event_root
+```
+
+```{sql, connection = conn}
+SELECT * FROM mirage_sessions LIMIT 1000;
 ```
 
 This finds all neighboring Mirage events to the "parent" eSense linked event (parent could also mean mother, but I mean parent/child in a graph relationship).
 With these events linked, now the Bodyguard files can be linked to the parent **and** child Mirage events.
+
+```{sql, connection = conn}
+CREATE TABLE linked_mirage_sessions AS
+SELECT *
+  , id_session IN (
+    SELECT id_session 
+    FROM mirage_sessions
+    WHERE valid_event AND id_event IN (
+      SELECT row_mirage FROM me_merge_distinct
+    )
+  ) AS linked_esense
+  , id_session IN (
+    SELECT id_session
+    FROM mirage_sessions
+    WHERE id_event IN (
+      SELECT id_mirage FROM linked_bg_mirage
+    )
+  ) AS linked_bg
+FROM mirage_sessions
+```
+
+From this comparison, we can compute the Mirage<->eSense and Mirage<->Bodyguard record linkages;
+
+```{r}
+res <- data.table::as.data.table(
+  DBI::dbGetQuery(conn, "SELECT DISTINCT id_session, linked_esense, linked_bg FROM linked_mirage_sessions;")
+)
+
+res[, table(linked_esense, linked_bg) / .N]
+```
 
 ```{r, include=FALSE}
 DBI::dbDisconnect(conn)
