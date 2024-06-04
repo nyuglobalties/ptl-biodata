@@ -64,12 +64,17 @@ workbook_for_partition <- function(partition,
       by = "id_mirage"
     ) |>
     tidytable::mutate(path = gsub(box_root, "", path, fixed = TRUE)) |>
+    tidytable::mutate(
+      n_mirage_match = .N,
+      .by = id_mirage
+    ) |>
     tidytable::select(
       id_session,
       id_recording,
       id_mirage,
       id_device,
       mirage_pid,
+      n_mirage_match,
       offset_start,
       time_start,
       offset_end,
@@ -106,8 +111,13 @@ workbook_for_partition <- function(partition,
     )
 
   list(
-    "Bodyguard Linked to Mirage" = linked_bg,
-    "Bodyguard Not Linked to Mirage" = unlinked_bg,
+    "BG Uniquely Linked to Mirage" = linked_bg |>
+      tidytable::filter(n_mirage_match == 1),
+    "BG Multiply Linked to Mirage" = linked_bg |>
+      tidytable::filter(n_mirage_match > 1) |>
+      tidytable::arrange(id_mirage, offset_start),
+    "BG Not Linked to Mirage" = unlinked_bg,
+    "Unlinked Mirage" = m_sessions[!id_event %in% linked_bg$id_mirage],
     "Mirage" = m_sessions,
     meta = tidytable::tidytable(
       year = partition$year,
