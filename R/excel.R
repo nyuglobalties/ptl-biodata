@@ -121,7 +121,15 @@ workbook_for_partition <- function(partition,
     "Mirage" = m_sessions,
     meta = tidytable::tidytable(
       year = partition$year,
-      month = partition$month
+      month = partition$month,
+      pct_mirage_linked = if (nrow(m_sessions) > 0) {
+        round(
+          100 * (1 - (nrow(m_sessions[!id_event %in% linked_bg$id_mirage]) / nrow(m_sessions))),
+          digits = 2
+        )
+      } else {
+        NA_real_
+      }
     )
   )
 }

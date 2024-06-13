@@ -32,17 +32,6 @@ source(here::here("projects/packages.R"))
 # Assign common global environment variables
 source(here::here("projects/environment.R"))
 
-# Enable interactive blueprintr macros so statements like
-# `.TARGET("colombia_caregiver_all")` evaluate to the desired target
-options(blueprintr.interactive_eval_macros = TRUE)
-
-# As of blueprintr 0.2.0, the `metadata_file_path` parameter
-# will rarely need to be manually specified
-options(blueprintr.use_local_metadata_path = TRUE)
-
-# Enable variable lineage
-options(blueprintr.use_variable_uuids = TRUE)
-
 ## ------ PROJECT-SPECIFIC ------
 # Use this iff you're using targets' projects feature
 # Check TAR_PROJECT
