@@ -204,9 +204,11 @@ if (!is.null(box_root())) {
         recordings = ecg_recordings,
         sessions = ecg_session_windows,
         mirage = mirage_windows,
-        hive_dir = bucket_bg_dir
+        hive_dir = bucket_bg_dir,
+        synology_subroot = "irrrd-data-intermediates"
       ),
       pattern = map(bucket_partitions),
+      cue = tar_cue(command = FALSE),
       iteration = "list",
       # To prevent massive OOMs that crash your computer, only run on the main
       # process. This blocks progress for the rest of the pipeline, of course,

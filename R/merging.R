@@ -62,19 +62,21 @@ link_ecg_to_mirage <- function(partition,
                                sessions,
                                mirage,
                                hive_dir,
-                               cache_root = here::here("_duckdb")) {
+                               cache_root = here::here("_duckdb"),
+                               synology_subroot = NULL) {
   if (length(partition) == 1) {
     partition <- partition[[1]]
   }
 
   stopifnot(is.numeric(partition$year) && is.numeric(partition$month))
+  assert_string(synology_subroot)
 
   yr <- partition$year
   mon <- partition$month
 
   db_dir <- file.path(hive_dir, glue::glue("year={yr}"), glue::glue("month={mon}"))
   db_path <- synology_path(
-    "irrrd",
+    synology_subroot,
     "bodyguard",
     glue::glue("year={yr}"),
     glue::glue("month={mon}"),
