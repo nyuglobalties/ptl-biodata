@@ -187,7 +187,17 @@ if (!is.null(box_root())) {
       mirage_windows,
       raw_mirage_events |>
         mirage_prepare_events() |>
-        mirage_process_windows(),
+        mirage_process_windows() |>
+        # NOTE: From 2023-03-12 to 2023-06-11, a 5-minute "play" window
+        # was recorded prior to the actual baseline event. These must be excluded
+        # as they create duplicate sessions
+        tidytable::filter(
+          !(
+            event == "play" &
+              start >= "2023-03-12" &
+              start <= "2023-06-11"
+          )
+        )
     ),
     tar_target(
       mirage_sessions,
@@ -208,7 +218,11 @@ if (!is.null(box_root())) {
         synology_subroot = "irrrd-data-intermediates"
       ),
       pattern = map(bucket_partitions),
-      cue = tar_cue(command = FALSE),
+      cue = tar_cue(
+        command = FALSE,
+        depend = TRUE,
+        iteration = TRUE
+      ),
       iteration = "list",
       # To prevent massive OOMs that crash your computer, only run on the main
       # process. This blocks progress for the rest of the pipeline, of course,
