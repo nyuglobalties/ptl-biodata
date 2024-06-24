@@ -176,6 +176,7 @@ if (!is.null(box_root())) {
         })
       }
     ),
+    tar_target(respondent_cats, seq_len(12)),
     tar_target(
       ecg_session_windows,
       bg_ecg_session_windows(
@@ -248,20 +249,23 @@ if (!is.null(box_root())) {
       excel_workbooks,
       workbook_for_partition(
         partition = bucket_partitions,
+        rescat = respondent_cats,
         linked_ecg_recordings = linked_ecg_recordings,
         ecg_meta = ecg_recordings,
         ecg_limits = ecg_recording_limits,
+        ecg_sessions = ecg_sessions_meta,
         mirage_sessions = mirage_sessions,
         mirage_windows = mirage_windows
       ),
-      pattern = map(bucket_partitions),
+      pattern = cross(bucket_partitions, respondent_cats),
       iteration = "list"
     ),
     tar_target(
       write_workbooks,
       write_workbook(
         excel_workbooks,
-        output_directory = box_path("ptl_irrrd_bio", "bg-excel")
+        output_directory = box_path("ptl_irrrd_bio", "bg-excel"),
+        write_file = !isTRUE(F_NO_WRITE)
       ),
       pattern = map(excel_workbooks)
     ),
