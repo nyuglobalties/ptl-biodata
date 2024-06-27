@@ -63,7 +63,7 @@ bg_ecg_session_windows <- function(sessions, bg_root) {
     tidytable::filter(is.na(attribute)) |>
     tidytable::mutate(
       value = toupper(value),
-      to_split_1 = grepl("\\d{1,2} ?([AP]M)?\\s+,?\\d{5,6}[CM]?[CM]? ?_", value),
+      to_split_1 = grepl("\\d{1,2} ?([AP]M)?-?\\s+,?\\d{5,6}[CM]?[CM]? ?_", value),
       to_split_2 = grepl("\\d{2} ?([AP]M)?\\([A-Z0-9 ]+\\)\\s+\\d{5,6}[CM]?[CM]?_", value),
       to_split_3 = grepl("^\\d{5},\\d{5}$", value),
       to_split_4 = grepl("^PID[A-Z0-9]+  PID[A-Z0-9]+$", value),
@@ -74,7 +74,7 @@ bg_ecg_session_windows <- function(sessions, bg_root) {
       value = tidytable::if_else(
         to_split_1,
         gsub(
-          "(\\d{1,2}) ?([AP]M)?\\s+,?(\\d{5,6}[CM]?[CM]?) ?(_)",
+          "(\\d{1,2}) ?([AP]M)?-?\\s+,?(\\d{5,6}[CM]?[CM]?) ?(_)",
           "\\1\\2\t\\3\\4",
           value
         ),
@@ -348,6 +348,7 @@ bg_fix_window_strs <- function(windows) {
         grepl("^\\d{5}M_.*\\(CHILD\\)$", value) ~ gsub("^(\\d{5})M(_.*)\\(CHILD\\)", "\\1C\\2", value),
         grepl("-110;", value) ~ gsub("-110;", "-11;0", value),
         grepl("_114;", value) ~ gsub("_114;", "_11;4", value),
+        grepl("-120;", value) ~ gsub("-120;", "-12;", value),
         grepl("11;\\d{2}PAM", value) ~ gsub("11;(\\d{2})PAM", "11;\\1AM", value),
         grepl("\\s+TWIN BABY$", value) ~ gsub("\\s+TWIN BABY$", "", value),
         grepl("\\(TWIN BABY\\)$", value) ~ gsub("\\(TWIN BABY\\)$", "", value),

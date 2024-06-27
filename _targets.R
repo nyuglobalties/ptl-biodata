@@ -62,7 +62,8 @@ if (!is.null(box_root())) {
         recursive = TRUE,
         full.names = TRUE,
         pattern = "ecg\\.csv$"
-      )
+      ),
+      cue = tar_cue(mode = "always")
     ),
     tar_target(
       raw_box_mirage_files,
@@ -72,7 +73,8 @@ if (!is.null(box_root())) {
         full.names = TRUE,
         pattern = "utcmarker\\.csv$",
         ignore.case = TRUE
-      )
+      ),
+      cue = tar_cue(mode = "always")
     ),
     tar_target(
       raw_box_esense_files,
@@ -82,7 +84,8 @@ if (!is.null(box_root())) {
         full.names = TRUE,
         pattern = "\\.csv$",
         ignore.case = TRUE
-      )
+      ),
+      cue = tar_cue(mode = "always")
     ),
     tar_target(
       ecg_sessions_meta,
@@ -279,6 +282,8 @@ if (!is.null(box_root())) {
   ) # end rlang::list2()
 
   main_targets <- append(main_targets, box_targets)
+} else {
+  message("Box not found! Skipping those targets...")
 }
 
 main_targets
