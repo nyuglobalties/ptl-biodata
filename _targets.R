@@ -106,7 +106,7 @@ if (!is.null(box_root())) {
     ),
     tar_target(
       ecg_recording_meta,
-      bg_ecg_recording_meta(ecg_files_subset),
+      bg_ecg_recording_meta(ecg_files_subset, verbose = TRUE),
       pattern = map(ecg_files_subset),
       iteration = "list"
     ),

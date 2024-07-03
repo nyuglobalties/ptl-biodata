@@ -1,6 +1,7 @@
 #' Read recording metadata
 #'
 #' @param path string - Path to CSV file
+#' @param verbose bool - Whether to report which file is being read or not
 #' @return ?data.frame(
 #'   id: string,
 #'   path: string,
@@ -10,8 +11,10 @@
 #'   tz: string,
 #'   sampling_rate: double(1),
 #' )
-bg_ecg_recording_meta <- function(path) {
+bg_ecg_recording_meta <- function(path, verbose = FALSE) {
   stopifnot(is.character(path) && length(path) == 1)
+
+  if (isTRUE(verbose)) message("Scanning ECG metadata for '", path, "'")
 
   out <- data.table::data.table(
     id = bg_recording_id(path),
