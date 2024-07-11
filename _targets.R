@@ -48,12 +48,24 @@ if (!is.null(box_root())) {
       "Bangladesh Study/Data/Firstbeat Bodyguard 3 data/Wave 1 data",
     ),
     tar_target(
+      synology_bodyguard_root,
+      "Raw data/HRV/Wave 1 data"
+    ),
+    tar_target(
       box_mirage_root,
       "Bangladesh Study/Data/Mirage data/Wave 1 data",
     ),
     tar_target(
+      synology_mirage_root,
+      "Raw data/MIRAGE"
+    ),
+    tar_target(
       box_esense_root,
       "Bangladesh Study/Data/eSense data/Wave 1 data",
+    ),
+    tar_target(
+      synology_esense_root,
+      "Raw data/EDA"
     ),
     tar_target(
       raw_box_ecg_files,
@@ -64,6 +76,16 @@ if (!is.null(box_root())) {
         pattern = "ecg\\.csv$"
       ),
       cue = tar_cue(mode = "always")
+    ),
+    tar_target(
+      raw_synology_ecg_files,
+      list.files(
+        synology_path(synology_bodyguard_root),
+        recursive = TRUE,
+        full.names = TRUE,
+        pattern = "ecg\\.csv"
+      ),
+      cue = tarchetypes::tar_cue_force(is_synology_available())
     ),
     tar_target(
       raw_box_mirage_files,
@@ -77,6 +99,17 @@ if (!is.null(box_root())) {
       cue = tar_cue(mode = "always")
     ),
     tar_target(
+      raw_synology_mirage_files,
+      list.files(
+        synology_path(synology_mirage_root),
+        recursive = TRUE,
+        full.names = TRUE,
+        pattern = "utcmarker\\.csv$",
+        ignore.case = TRUE
+      ),
+      cue = tarchetypes::tar_cue_force(is_synology_available())
+    ),
+    tar_target(
       raw_box_esense_files,
       list.files(
         box_path(box_esense_root),
@@ -88,10 +121,31 @@ if (!is.null(box_root())) {
       cue = tar_cue(mode = "always")
     ),
     tar_target(
+      raw_synology_esense_files,
+      list.files(
+        synology_path(synology_esense_root),
+        recursive = TRUE,
+        full.names = TRUE,
+        pattern = "\\.csv$",
+        ignore.case = TRUE
+      ),
+      cue = tarchetypes::tar_cue_force(is_synology_available())
+    ),
+    tar_target(
+      raw_ecg_files,
+      prefer_synology(raw_synology_ecg_files, raw_box_ecg_files),
+      cue = tar_cue(mode = "always")
+    ),
+    tar_target(
+      raw_ecg_root,
+      prefer_synology(synology_bodyguard_root, box_bodyguard_root),
+      cue = tar_cue(mode = "always")
+    ),
+    tar_target(
       ecg_sessions_meta,
       bg_ecg_session_meta(
-        raw_box_ecg_files,
-        bg_root = box_bodyguard_root,
+        raw_ecg_files,
+        bg_root = raw_ecg_root,
         # TRUE by default! Do `Sys.setenv(F_RUN_ALL = "FALSE")` to run in test mode
         sample_size = if (!isTRUE(F_RUN_ALL)) 2000 else NULL
       ),
@@ -99,7 +153,7 @@ if (!is.null(box_root())) {
     tar_target(
       ecg_files_subset,
       bg_filter_recordings(
-        raw_box_ecg_files,
+        raw_ecg_files,
         ecg_sessions_meta,
         run_all = isTRUE(F_RUN_ALL)
       )
@@ -138,9 +192,19 @@ if (!is.null(box_root())) {
         tidytable::arrange(id_session, sequence)
     ),
     tar_target(
+      raw_esense_files,
+      prefer_synology(raw_synology_esense_files, raw_box_esense_files),
+      cue = tar_cue(mode = "always")
+    ),
+    tar_target(
+      raw_esense_root,
+      prefer_synology(synology_esense_root, box_esense_root),
+      cue = tar_cue(mode = "always")
+    ),
+    tar_target(
       esense_meta_all,
-      esense_file_meta(raw_box_esense_files, esense_root = box_esense_root),
-      pattern = map(raw_box_esense_files),
+      esense_file_meta(raw_esense_files, esense_root = raw_esense_root),
+      pattern = map(raw_esense_files),
       iteration = "list"
     ),
     tar_target(
@@ -153,9 +217,14 @@ if (!is.null(box_root())) {
         tidytable::mutate(id = seq_len(.N))
     ),
     tar_target(
+      raw_mirage_files,
+      prefer_synology(raw_synology_mirage_files, raw_box_mirage_files),
+      cue = tar_cue(mode = "always")
+    ),
+    tar_target(
       raw_mirage_events,
-      read_mirage_events(raw_box_mirage_files),
-      pattern = map(raw_box_mirage_files),
+      read_mirage_events(raw_mirage_files),
+      pattern = map(raw_mirage_files),
       iteration = "list",
     ),
 
