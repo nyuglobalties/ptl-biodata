@@ -192,12 +192,12 @@ if (!is.null(box_root())) {
       raw_mirage_events |>
         mirage_prepare_events() |>
         mirage_process_windows() |>
-        # NOTE: From 2023-03-12 to 2023-06-11, a 5-minute "play" window
-        # was recorded prior to the actual baseline event. These must be excluded
+        # NOTE: From 2023-03-12 to 2023-06-11, a 3-minute "baseline" window
+        # was recorded prior to the real baseline event. These must be excluded
         # as they create duplicate sessions
         tidytable::filter(
           !(
-            event == "play" &
+            event == "baseline" &
               start >= "2023-03-12" &
               start <= "2023-06-11"
           )
