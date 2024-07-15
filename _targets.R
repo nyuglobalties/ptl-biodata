@@ -62,7 +62,9 @@ if (!is.null(box_root())) {
         recursive = TRUE,
         full.names = TRUE,
         pattern = "ecg\\.csv$"
-      ),
+      ) |>
+        # FIXME: Remove filter once Synology stuff merged in
+        discard(\(x) grepl(";", x)),
       cue = tar_cue(mode = "always")
     ),
     tar_target(
